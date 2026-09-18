@@ -204,11 +204,19 @@ jobs:
           git -C "$directory" checkout -q --detach FETCH_HEAD
           echo "directory=$directory" >> "$GITHUB_OUTPUT"
           echo "sha=$(git -C "$directory" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          secrets_directory="$directory/statstrade/$([[ "$TARGET" == production ]] && echo prod || echo v2-db/testing)"
           if [[ "$TARGET" == production ]]; then
-            test -f "$secrets_directory/supabase.env"
-            test -f "$secrets_directory/database.env"
+            secrets_directory="$directory/statstrade/v2-db/prod"
+            database_directory="$directory/statstrade/prod"
+            test -f "$secrets_directory/supabase.env" || {
+              echo "The statstrade/v2-db/prod profile has no supabase.env file." >&2
+              exit 1
+            }
+            test -f "$database_directory/database.env" || {
+              echo "The statstrade/prod profile has no database.env file." >&2
+              exit 1
+            }
           else
+            secrets_directory="$directory/statstrade/v2-db/testing"
             [[ -d "$secrets_directory" ]] || {
               echo "No statstrade/v2-db/testing dot-secrets profile exists; refusing to use production credentials." >&2
               exit 1
@@ -221,7 +229,7 @@ jobs:
           filtered_directory="$RUNNER_TEMP/database-secrets"
           install -d -m 700 "$filtered_directory"
           if [[ "$TARGET" == production ]]; then
-            for file in "$secrets_directory"/*.env; do
+            for file in "$secrets_directory/supabase.env" "$database_directory/database.env"; do
               [[ -f "$file" ]] || continue
               output="$filtered_directory/$(basename "$file")"
               awk -F= '
@@ -275,7 +283,7 @@ jobs:
               expected_database=postgres
               export PGPASSWORD="$TESTING_DATABASE_PASSWORD"
               ;;
-            production:incremental) [[ "$SECRETS_PROFILE" == */statstrade/prod ]] ;;
+            production:incremental) [[ "$SECRETS_PROFILE" == */statstrade/v2-db/prod ]] ;;
             *) echo 'Unsupported database target/mode combination.' >&2; exit 2 ;;
           esac
           if [[ "$TARGET" == production ]]; then

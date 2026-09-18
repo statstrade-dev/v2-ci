@@ -79,14 +79,15 @@ Testing requests use the separate
 `statstrade/v2-db/testing/supabase.env` dot-secrets profile and are limited
 to a destructive migration reset. That profile requires
 `SUPABASE_DB_URL` and `SUPABASE_DB_PASS`; the password is passed only through
-the process environment. Production requests use `statstrade/prod`, are
-incremental-only, and require the protected
-`statstrade-database-production` environment. The workflow checks out a
-detached dot-secrets revision, exposes only the target-specific database
+the process environment. Production requests use
+`statstrade/v2-db/prod/supabase.env` together with the database settings in
+`statstrade/prod/database.env`, are incremental-only, and require the
+protected `statstrade-database-production` environment. The workflow checks
+out a detached dot-secrets revision, exposes only the target-specific database
 allowlist, and retains a non-secret provenance manifest. Production requires
 `SUPABASE_PROJECT_REF`, `SUPABASE_URL`, `DATABASE_URL`, and `POSTGRES_DB`
-across its `.env` files. A missing testing profile is a deliberate preflight
-failure; production configuration is never used as a fallback.
+across those `.env` files. A missing testing profile is a deliberate
+preflight failure; production configuration is never used as a fallback.
 
 Focused local checks for the workflow helpers are:
 
