@@ -30,9 +30,16 @@ env:
 
 jobs:
   test:
-    name: gwdb.common, gwdb.fn, gwdb.rpc
+    name: ${{ matrix.selector }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        selector:
+          - gwdb.common
+          - gwdb.fn
+          - gwdb.rpc
     steps:
       - name: Validate source request
         env:
@@ -84,23 +91,27 @@ jobs:
             bash -lc 'set -o pipefail; java -version; lein install 2>&1 | tee foundation-install.log'
 
       - name: Run database tests
+        env:
+          TEST_LOG: ${{ matrix.selector }}-test.log
         run: |
           docker run --rm --network host \
             -e "CI=true" \
             -e "LEIN_JVM_OPTS=-Xms512m -Xmx3g -XX:+UseG1GC" \
+            -e "SELECTOR=${{ matrix.selector }}" \
+            -e "TEST_LOG=$TEST_LOG" \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -w "$GITHUB_WORKSPACE/v2-db" \
             -v "$HOME/.m2:/root/.m2" \
             -v /var/run/docker.sock:/var/run/docker.sock:ro \
             "$CI_IMAGE" \
-            bash -lc 'set -o pipefail; lein test :with "[gwdb.common gwdb.fn gwdb.rpc]" 2>&1 | tee gwdb-test.log'
+            bash -lc 'set -o pipefail; lein test :with "[$SELECTOR]" 2>&1 | tee "$TEST_LOG"'
 
       - name: Upload test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v2-db-gwdb-tests-${{ github.run_id }}
-          path: v2-db/gwdb-test.log
+          name: v2-db-${{ matrix.selector }}-test-${{ github.run_id }}
+          path: v2-db/${{ matrix.selector }}-test.log
           if-no-files-found: warn
           retention-days: 14
 

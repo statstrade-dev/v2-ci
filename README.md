@@ -8,14 +8,19 @@ database-first gate.
 
 The active `.github/workflows/v2-ci.yml` workflow accepts the
 `v2-db-changed` dispatch from `statstrade-dev/v2-db`, checks out the exact
-source commit, installs the pinned Foundation checkout, and runs:
+source commit, installs the pinned Foundation checkout, and runs a three-entry
+matrix:
 
 ```sh
-./lein test :with "[gwdb.common gwdb.fn gwdb.rpc]"
+./lein test :with "[gwdb.common]"
+./lein test :with "[gwdb.fn]"
+./lein test :with "[gwdb.rpc]"
 ```
 
-Execution uses the pinned `ghcr.io/zcaudate-xyz/infra-foundation-dev:ci`
-runtime, which supplies the supported Java and Leiningen environment.
+The matrix does not fail fast, so all three selectors produce independent
+results and logs. Execution uses the pinned
+`ghcr.io/zcaudate-xyz/infra-foundation-dev:ci` runtime, which supplies the
+supported Java and Leiningen environment.
 
 The source workflow lives in
 `statstrade-dev/v2-db/.github/workflows/request-v2-ci.yml`. The source
