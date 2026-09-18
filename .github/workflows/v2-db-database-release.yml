@@ -204,30 +204,35 @@ jobs:
           git -C "$directory" checkout -q --detach FETCH_HEAD
           echo "directory=$directory" >> "$GITHUB_OUTPUT"
           echo "sha=$(git -C "$directory" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          secrets_directory="$directory/statstrade/$([[ "$TARGET" == production ]] && echo prod || echo testing)"
+          secrets_directory="$directory/statstrade/$([[ "$TARGET" == production ]] && echo prod || echo v2-db/testing)"
           if [[ "$TARGET" == production ]]; then
             test -f "$secrets_directory/supabase.env"
             test -f "$secrets_directory/database.env"
           else
             [[ -d "$secrets_directory" ]] || {
-              echo "No statstrade/testing dot-secrets profile exists; refusing to use production credentials." >&2
+              echo "No statstrade/v2-db/testing dot-secrets profile exists; refusing to use production credentials." >&2
               exit 1
             }
-            compgen -G "$secrets_directory/*.env" > /dev/null || {
-              echo "The statstrade/testing dot-secrets profile has no .env files." >&2
+            test -f "$secrets_directory/supabase.env" || {
+              echo "The statstrade/v2-db/testing profile has no supabase.env file." >&2
               exit 1
             }
           fi
           filtered_directory="$RUNNER_TEMP/database-secrets"
           install -d -m 700 "$filtered_directory"
-          for file in "$secrets_directory"/*.env; do
-            [[ -f "$file" ]] || continue
-            output="$filtered_directory/$(basename "$file")"
-            awk -F= '
-              $1 ~ /^(SUPABASE_PROJECT_REF|SUPABASE_URL|DATABASE_URL|POSTGRES_DB)$/ {print}
-            ' "$file" > "$output"
-            chmod 600 "$output"
-          done
+          if [[ "$TARGET" == production ]]; then
+            for file in "$secrets_directory"/*.env; do
+              [[ -f "$file" ]] || continue
+              output="$filtered_directory/$(basename "$file")"
+              awk -F= '
+                $1 ~ /^(SUPABASE_PROJECT_REF|SUPABASE_URL|DATABASE_URL|POSTGRES_DB)$/ {print}
+              ' "$file" > "$output"
+              chmod 600 "$output"
+            done
+          else
+            install -m 600 "$secrets_directory/supabase.env" \
+              "$filtered_directory/supabase.env"
+          fi
           echo "secrets_directory=$filtered_directory" >> "$GITHUB_OUTPUT"
           echo "profile=$secrets_directory" >> "$GITHUB_OUTPUT"
 
@@ -238,32 +243,54 @@ jobs:
           SECRETS_DIRECTORY: ${{ steps.secrets.outputs.secrets_directory }}
         run: |
           set -euo pipefail
+          contract=ci/.github/config/statstrade-database-secrets.json
+          if [[ "$TARGET" == testing ]]; then
+            contract=ci/.github/config/statstrade-v2-db-testing-secrets.json
+          fi
           node ci/.github/scripts/load-env-files.mjs \
             "$SECRETS_DIRECTORY" \
-            ci/.github/config/statstrade-database-secrets.json
+            "$contract"
 
       - name: Verify target database identity
         shell: bash
         env:
-          DATABASE_URL: ${{ steps.provider-secrets.outputs.DATABASE_URL }}
+          PRODUCTION_DATABASE_URL: ${{ steps.provider-secrets.outputs.DATABASE_URL }}
           SUPABASE_PROJECT_REF: ${{ steps.provider-secrets.outputs.SUPABASE_PROJECT_REF }}
           SUPABASE_URL: ${{ steps.provider-secrets.outputs.SUPABASE_URL }}
           EXPECTED_DATABASE: ${{ steps.provider-secrets.outputs.POSTGRES_DB }}
+          TESTING_PROJECT_URL: ${{ steps.provider-secrets.outputs.SUPABASE_DB_URL }}
+          TESTING_DATABASE_PASSWORD: ${{ steps.provider-secrets.outputs.SUPABASE_DB_PASS }}
           SECRETS_PROFILE: ${{ steps.secrets.outputs.profile }}
         run: |
           set -euo pipefail
           case "$TARGET:$MODE" in
-            testing:reset) [[ "$SECRETS_PROFILE" == */statstrade/testing ]] ;;
+            testing:reset)
+              [[ "$SECRETS_PROFILE" == */statstrade/v2-db/testing ]]
+              project_host="${TESTING_PROJECT_URL#https://}"
+              project_host="${project_host#http://}"
+              project_host="${project_host%%/*}"
+              project_ref="${project_host%%.*}"
+              [[ "$project_host" == "$project_ref.supabase.co" ]]
+              database_url="postgresql://postgres@db.${project_host}:5432/postgres"
+              expected_database=postgres
+              export PGPASSWORD="$TESTING_DATABASE_PASSWORD"
+              ;;
             production:incremental) [[ "$SECRETS_PROFILE" == */statstrade/prod ]] ;;
             *) echo 'Unsupported database target/mode combination.' >&2; exit 2 ;;
           esac
-          url_host="${SUPABASE_URL#https://}"
-          url_host="${url_host#http://}"
-          url_host="${url_host%%/*}"
-          [[ "$url_host" == "$SUPABASE_PROJECT_REF.supabase.co" ]]
+          if [[ "$TARGET" == production ]]; then
+            url_host="${SUPABASE_URL#https://}"
+            url_host="${url_host#http://}"
+            url_host="${url_host%%/*}"
+            [[ "$url_host" == "$SUPABASE_PROJECT_REF.supabase.co" ]]
+            database_url="$PRODUCTION_DATABASE_URL"
+            expected_database="$EXPECTED_DATABASE"
+          fi
+          export DATABASE_URL="$database_url"
           if ! actual_database="$(
             docker run --rm --network host \
               -e DATABASE_URL \
+              -e PGPASSWORD \
               "$CI_IMAGE" bash -lc \
               'psql "$DATABASE_URL" -At -v ON_ERROR_STOP=1 -c "select current_database()"' \
               2>"$RUNNER_TEMP/database-identity-check.log"
@@ -271,7 +298,7 @@ jobs:
             echo 'Database identity/connectivity check failed.' >&2
             exit 2
           fi
-          if [[ -n "$EXPECTED_DATABASE" && "$actual_database" != "$EXPECTED_DATABASE" ]]; then
+          if [[ "$actual_database" != "$expected_database" ]]; then
             echo 'Connected database does not match the configured target.' >&2
             exit 2
           fi
@@ -284,10 +311,21 @@ jobs:
       - name: Apply database delivery
         shell: bash
         env:
-          DATABASE_URL: ${{ steps.provider-secrets.outputs.DATABASE_URL }}
+          PRODUCTION_DATABASE_URL: ${{ steps.provider-secrets.outputs.DATABASE_URL }}
+          TESTING_PROJECT_URL: ${{ steps.provider-secrets.outputs.SUPABASE_DB_URL }}
+          TESTING_DATABASE_PASSWORD: ${{ steps.provider-secrets.outputs.SUPABASE_DB_PASS }}
         run: |
           set -euo pipefail
           cd source
+          if [[ "$TARGET" == testing ]]; then
+            project_host="${TESTING_PROJECT_URL#https://}"
+            project_host="${project_host#http://}"
+            project_host="${project_host%%/*}"
+            export PGPASSWORD="$TESTING_DATABASE_PASSWORD"
+            export DATABASE_URL="postgresql://postgres@db.${project_host}:5432/postgres"
+          else
+            export DATABASE_URL="$PRODUCTION_DATABASE_URL"
+          fi
           case "$TARGET:$MODE" in
             testing:reset)
               supabase db reset --db-url "$DATABASE_URL" --no-seed --yes --workdir docker/gw-dev

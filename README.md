@@ -75,12 +75,15 @@ requested ref still points at that commit before building or deploying. The
 Foundation revision is also an explicit workflow input and is recorded in the
 deployment manifest.
 
-Testing requests use a separate `statstrade/testing` dot-secrets profile and
-are limited to a destructive migration reset. Production requests use
-`statstrade/prod`, are incremental-only, and require the protected
+Testing requests use the separate
+`statstrade/v2-db/testing/supabase.env` dot-secrets profile and are limited
+to a destructive migration reset. That profile requires
+`SUPABASE_DB_URL` and `SUPABASE_DB_PASS`; the password is passed only through
+the process environment. Production requests use `statstrade/prod`, are
+incremental-only, and require the protected
 `statstrade-database-production` environment. The workflow checks out a
-detached dot-secrets revision, exposes only the database allowlist, and
-retains a non-secret provenance manifest. Each profile must provide
+detached dot-secrets revision, exposes only the target-specific database
+allowlist, and retains a non-secret provenance manifest. Production requires
 `SUPABASE_PROJECT_REF`, `SUPABASE_URL`, `DATABASE_URL`, and `POSTGRES_DB`
 across its `.env` files. A missing testing profile is a deliberate preflight
 failure; production configuration is never used as a fallback.
