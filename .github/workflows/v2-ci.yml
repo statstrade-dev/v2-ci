@@ -1,0 +1,201 @@
+name: Greenways v2 CI
+
+on:
+  repository_dispatch:
+    types: [v2-ci-requested]
+  workflow_dispatch:
+    inputs:
+      source_ref: {description: 'Branch, tag, or commit in statstrade-dev/v2', required: true, default: main, type: string}
+      run_core: {description: 'Run gwdb.core', required: true, default: true, type: boolean}
+      run_rpc: {description: 'Run gwdb.rpc', required: true, default: true, type: boolean}
+      run_gwbuild: {description: 'Run gwbuild', required: true, default: true, type: boolean}
+      run_gwlink: {description: 'Run gwlink', required: true, default: true, type: boolean}
+      run_backend_support: {description: 'Run backend support', required: true, default: true, type: boolean}
+      run_js: {description: 'Build gwlink JavaScript', required: true, default: true, type: boolean}
+      run_dart: {description: 'Build gwlink Dart', required: true, default: true, type: boolean}
+      run_frontend: {description: 'Validate main frontend', required: true, default: true, type: boolean}
+      run_docs: {description: 'Build Docusaurus', required: true, default: true, type: boolean}
+      publish_docs: {description: 'Publish Docusaurus', required: true, default: false, type: boolean}
+      deploy_docs_preview: {description: 'Deploy a Build Portal preview', required: true, default: false, type: boolean}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: v2-ci-${{ github.event.client_payload.correlation_id || github.event.client_payload.source_sha || inputs.source_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gwdb-core:
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_core) || github.event.client_payload.segments.gwdb_core == true
+    uses: ./.github/workflows/_v2-backend-segment.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      source_run_url: ${{ github.event.client_payload.source_run_url || '' }}
+      correlation_id: ${{ github.event.client_payload.correlation_id || format('{0}:{1}', github.run_id, github.run_attempt) }}
+      selectors: gwdb.core
+      segment_name: gwdb.core
+      status_context: v2-ci/gwdb-core
+      artifact_suffix: gwdb-core
+      project_path: backend-db
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
+  gwdb-rpc:
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_rpc) || github.event.client_payload.segments.gwdb_rpc == true
+    uses: ./.github/workflows/_v2-backend-segment.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      correlation_id: ${{ github.event.client_payload.correlation_id || format('{0}:{1}', github.run_id, github.run_attempt) }}
+      selectors: gwdb.rpc
+      segment_name: gwdb.rpc
+      status_context: v2-ci/gwdb-rpc
+      artifact_suffix: gwdb-rpc
+      project_path: backend-db
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
+  gwbuild:
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_gwbuild) || github.event.client_payload.segments.gwbuild == true
+    uses: ./.github/workflows/_v2-backend-segment.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      correlation_id: ${{ github.event.client_payload.correlation_id || format('{0}:{1}', github.run_id, github.run_attempt) }}
+      selectors: gwbuild
+      segment_name: gwbuild and generated artifacts
+      status_context: v2-ci/gwbuild
+      artifact_suffix: gwbuild
+      project_path: backend-db
+      verify_generated: true
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
+  gwlink:
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_gwlink) || github.event.client_payload.segments.gwlink == true
+    uses: ./.github/workflows/_v2-backend-segment.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      correlation_id: ${{ github.event.client_payload.correlation_id || format('{0}:{1}', github.run_id, github.run_attempt) }}
+      selectors: gwlink
+      segment_name: gwlink
+      status_context: v2-ci/gwlink
+      artifact_suffix: gwlink
+      project_path: backend
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
+  backend-support:
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_backend_support) || github.event.client_payload.segments.backend_support == true
+    uses: ./.github/workflows/_v2-backend-segment.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      correlation_id: ${{ github.event.client_payload.correlation_id || format('{0}:{1}', github.run_id, github.run_attempt) }}
+      selectors: 'gwdb.deploy gwdb.main gwdb.debug gwdb.bench scaffold gwtool'
+      segment_name: backend support
+      status_context: v2-ci/backend-support
+      artifact_suffix: backend-support
+      project_path: backend-db
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
+  gwlink-js:
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_js) || github.event.client_payload.segments.gwlink_js == true
+    uses: ./.github/workflows/_v2-language-build.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      kind: js
+      status_context: v2-ci/gwlink-js
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
+  gwlink-dart:
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_dart) || github.event.client_payload.segments.gwlink_dart == true
+    uses: ./.github/workflows/_v2-language-build.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      kind: dart
+      status_context: v2-ci/gwlink-dart
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
+  frontend:
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_frontend) || github.event.client_payload.segments.frontend == true
+    uses: ./.github/workflows/_v2-frontend.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      status_context: v2-ci/frontend
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
+  docs:
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_docs) || github.event.client_payload.segments.docs == true
+    uses: ./.github/workflows/_v2-docs.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      publish: ${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.source_ref == 'main') || (github.event_name == 'workflow_dispatch' && inputs.publish_docs) }}
+      deploy_preview: ${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.pull_request_number != null) || (github.event_name == 'workflow_dispatch' && inputs.deploy_docs_preview) || github.event_name == 'pull_request' }}
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+  main-frontend-release:
+    name: Deploy successful main frontend
+    needs:
+      - frontend
+      - docs
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'repository_dispatch' &&
+        github.event.client_payload.source_ref == 'main' &&
+        needs.frontend.result == 'success' &&
+        (needs.docs.result == 'success' || needs.docs.result == 'skipped')
+      }}
+    uses: ./.github/workflows/_statstrade-frontend-main.yml
+    with:
+      correlation_id: ${{ github.event.client_payload.correlation_id }}
+      source_repository: ${{ github.event.client_payload.source_repository }}
+      source_sha: ${{ github.event.client_payload.source_sha }}
+      secrets_ref: main
+    secrets: inherit
+
+  testing-release:
+    name: Deploy persistent testing
+    needs:
+      - gwdb-core
+      - gwdb-rpc
+      - gwbuild
+      - gwlink
+      - backend-support
+      - gwlink-js
+      - gwlink-dart
+      - frontend
+      - docs
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'repository_dispatch' &&
+        github.event.client_payload.source_ref == 'main' &&
+        !contains(needs.*.result, 'failure') &&
+        !contains(needs.*.result, 'cancelled')
+      }}
+    uses: ./.github/workflows/statstrade-environment.yml
+    with:
+      action: deploy
+      correlation_id: ${{ github.event.client_payload.correlation_id }}
+      slug: testing
+      source_repository: ${{ github.event.client_payload.source_repository }}
+      source_ref: ${{ github.event.client_payload.source_sha }}
+      profile: testnet
+      confirm_delete: ''
+      secrets_ref: main
+    secrets: inherit
