@@ -38,9 +38,8 @@ jobs:
           if [[ ! -f v2/.gitmodules ]]; then
             exit 0
           fi
-          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
-          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
-          git config --global http.https://github.com/.extraheader "AUTHORIZATION: bearer ${GH_TOKEN}"
+          git config --global --add url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
           git -C v2 submodule sync --recursive
           git -C v2 submodule update --init --recursive
       - id: foundation
