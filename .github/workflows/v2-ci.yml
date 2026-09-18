@@ -1,0 +1,145 @@
+name: V2 DB CI
+
+on:
+  repository_dispatch:
+    types: [v2-db-changed]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact commit SHA in statstrade-dev/v2-db
+        required: true
+        type: string
+      source_ref:
+        description: Source ref containing the requested commit
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-db-ci-${{ github.event.client_payload.source_sha || inputs.source_sha || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_REPOSITORY: statstrade-dev/v2-db
+  FOUNDATION_REPOSITORY: zcaudate-xyz/foundation-base
+  FOUNDATION_SHA: f708e8cfe86371c7abbdbb3bb7cabf0a9c175836
+  CI_IMAGE: ghcr.io/zcaudate-xyz/infra-foundation-dev:ci
+
+jobs:
+  test:
+    name: ${{ matrix.selector }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        selector:
+          - gwdb.common
+          - gwdb.fn
+          - gwdb.rpc
+    steps:
+      - name: Validate source request
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REQUESTED_REPOSITORY: ${{ github.event.client_payload.source_repository || env.SOURCE_REPOSITORY }}
+          REQUESTED_SHA: ${{ github.event.client_payload.source_sha || inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          test "$REQUESTED_REPOSITORY" = "$SOURCE_REPOSITORY"
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out v2-db
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ github.event.client_payload.source_sha || inputs.source_sha }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: v2-db
+          fetch-depth: 1
+
+      - name: Check out pinned Foundation
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FOUNDATION_REPOSITORY }}
+          ref: ${{ env.FOUNDATION_SHA }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: foundation-base
+          fetch-depth: 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Install Foundation and link checkout
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/v2-db/checkouts" "$HOME/.m2"
+          ln -sfn "$GITHUB_WORKSPACE/foundation-base" "$GITHUB_WORKSPACE/v2-db/checkouts/foundation"
+          docker pull "$CI_IMAGE"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE/foundation-base" \
+            -v "$HOME/.m2:/root/.m2" \
+            "$CI_IMAGE" \
+            bash -lc 'set -o pipefail; java -version; lein install 2>&1 | tee foundation-install.log'
+
+      - name: Run database tests
+        env:
+          TEST_LOG: ${{ matrix.selector }}-test.log
+        run: |
+          docker run --rm --network host \
+            -e "CI=true" \
+            -e "LEIN_JVM_OPTS=-Xms512m -Xmx3g -XX:+UseG1GC" \
+            -e "SELECTOR=${{ matrix.selector }}" \
+            -e "TEST_LOG=$TEST_LOG" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE/v2-db" \
+            -v "$HOME/.m2:/root/.m2" \
+            -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            "$CI_IMAGE" \
+            bash -lc 'set -o pipefail; lein test :with "[$SELECTOR]" 2>&1 | tee "$TEST_LOG"'
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-db-${{ matrix.selector }}-test-${{ github.run_id }}
+          path: v2-db/${{ matrix.selector }}-test.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  report:
+    name: Report source status
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish source commit status
+        uses: actions/github-script@v7
+        env:
+          SOURCE_REPOSITORY: ${{ env.SOURCE_REPOSITORY }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha || inputs.source_sha }}
+          TEST_RESULT: ${{ needs.test.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            const [owner, repo] = process.env.SOURCE_REPOSITORY.split('/');
+            const result = process.env.TEST_RESULT;
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              sha: process.env.SOURCE_SHA,
+              state,
+              context: 'v2-ci/gwdb',
+              description: state === 'success' ? 'gwdb tests passed' : 'gwdb tests failed',
+              target_url: process.env.RUN_URL,
+            });
