@@ -66,6 +66,32 @@ if tracked generated output differs. This protects the sequence:
 source definition -> generator -> tracked artifact -> consumer build
 ```
 
+## v2-db database releases
+
+`v2-db-database-release.yml` is the central execution path for manually
+requested database releases. The workflow requires an exact
+`statstrade-dev/v2-db` commit and a source branch or ref; it verifies that the
+requested ref still points at that commit before building or deploying. The
+Foundation revision is also an explicit workflow input and is recorded in the
+deployment manifest.
+
+Testing requests use a separate `statstrade/testing` dot-secrets profile and
+are limited to a destructive migration reset. Production requests use
+`statstrade/prod`, are incremental-only, and require the protected
+`statstrade-database-production` environment. The workflow checks out a
+detached dot-secrets revision, exposes only the database allowlist, and
+retains a non-secret provenance manifest. Each profile must provide
+`SUPABASE_PROJECT_REF`, `SUPABASE_URL`, `DATABASE_URL`, and `POSTGRES_DB`
+across its `.env` files. A missing testing profile is a deliberate preflight
+failure; production configuration is never used as a fallback.
+
+Focused local checks for the workflow helpers are:
+
+```sh
+node --test .github/scripts/load-env-files.test.mjs
+node --test .github/scripts/validate-database-release.test.mjs
+```
+
 ## Diagnostics
 
 Each selected job retains its focused logs or build output for 14 days and

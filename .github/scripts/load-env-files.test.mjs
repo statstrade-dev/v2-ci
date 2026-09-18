@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseEnvironmentFiles } from "./load-env-files.mjs";
+import { outputEnvironmentValues, parseEnvironmentFiles } from "./load-env-files.mjs";
 
 const contract = {
   required: ["TOKEN", "HOST"],
@@ -20,6 +20,20 @@ test("parses allowlisted single-line values", () => {
     HOST: "example.test",
     SITE: "site-id",
   });
+});
+
+test("can restrict emitted values to the deployment step allowlist", () => {
+  const values = parseEnvironmentFiles(
+    [{ name: ".env", content: "TOKEN=secret\nHOST=example.test\nSITE=site-id\n" }],
+    { ...contract, output: ["TOKEN", "HOST"] },
+  );
+  assert.deepEqual(
+    Object.fromEntries(outputEnvironmentValues(values, { ...contract, output: ["TOKEN", "HOST"] })),
+    {
+      TOKEN: "secret",
+      HOST: "example.test",
+    },
+  );
 });
 
 test("rejects duplicates, unexpected variables, and missing required values", () => {

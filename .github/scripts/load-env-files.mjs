@@ -53,6 +53,11 @@ export function parseEnvironmentFiles(entries, contract) {
   return values;
 }
 
+export function outputEnvironmentValues(values, contract) {
+  const output = new Set(contract.output ?? values.keys());
+  return new Map([...values].filter(([key]) => output.has(key)));
+}
+
 function mask(value) {
   return value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
@@ -77,8 +82,9 @@ async function main() {
     })),
   );
   const values = parseEnvironmentFiles(entries, contract);
+  const outputValues = outputEnvironmentValues(values, contract);
 
-  for (const [key, value] of values) {
+  for (const [key, value] of outputValues) {
     process.stdout.write(`::add-mask::${mask(value)}\n`);
     const delimiter = `STATSTRADE_${randomBytes(16).toString("hex")}`;
     await appendFile(output, `${key}<<${delimiter}\n${value}\n${delimiter}\n`, {
