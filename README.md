@@ -14,6 +14,9 @@ source commit, installs the pinned Foundation checkout, and runs:
 ./lein test :with "[gwdb.common gwdb.fn gwdb.rpc]"
 ```
 
+Execution uses the pinned `ghcr.io/zcaudate-xyz/infra-foundation-dev:ci`
+runtime, which supplies the supported Java and Leiningen environment.
+
 The source workflow lives in
 `statstrade-dev/v2-db/.github/workflows/request-v2-ci.yml`. The source
 repository must configure a repository-scoped `GH_TOKEN` secret with

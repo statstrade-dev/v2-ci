@@ -26,6 +26,7 @@ env:
   SOURCE_REPOSITORY: statstrade-dev/v2-db
   FOUNDATION_REPOSITORY: zcaudate-xyz/foundation-base
   FOUNDATION_SHA: f708e8cfe86371c7abbdbb3bb7cabf0a9c175836
+  CI_IMAGE: ghcr.io/zcaudate-xyz/infra-foundation-dev:ci
 
 jobs:
   test:
@@ -59,28 +60,40 @@ jobs:
           repository: ${{ env.FOUNDATION_REPOSITORY }}
           ref: ${{ env.FOUNDATION_SHA }}
           token: ${{ secrets.GH_TOKEN }}
-          path: foundation
+          path: foundation-base
           fetch-depth: 1
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          distribution: temurin
-          java-version: '21'
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN }}
 
       - name: Install Foundation and link checkout
-        working-directory: v2-db
         run: |
           set -euo pipefail
-          mkdir -p checkouts
-          ln -sfn "$GITHUB_WORKSPACE/foundation" checkouts/foundation
-          ../foundation/lein install
+          mkdir -p "$GITHUB_WORKSPACE/v2-db/checkouts" "$HOME/.m2"
+          ln -sfn "$GITHUB_WORKSPACE/foundation-base" "$GITHUB_WORKSPACE/v2-db/checkouts/foundation"
+          docker pull "$CI_IMAGE"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE/foundation-base" \
+            -v "$HOME/.m2:/root/.m2" \
+            "$CI_IMAGE" \
+            bash -lc 'set -o pipefail; java -version; lein install 2>&1 | tee foundation-install.log'
 
       - name: Run database tests
-        working-directory: v2-db
         run: |
-          set -o pipefail
-          ./lein test :with "[gwdb.common gwdb.fn gwdb.rpc]" 2>&1 | tee gwdb-test.log
+          docker run --rm --network host \
+            -e "CI=true" \
+            -e "LEIN_JVM_OPTS=-Xms512m -Xmx3g -XX:+UseG1GC" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE/v2-db" \
+            -v "$HOME/.m2:/root/.m2" \
+            -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            "$CI_IMAGE" \
+            bash -lc 'set -o pipefail; lein test :with "[gwdb.common gwdb.fn gwdb.rpc]" 2>&1 | tee gwdb-test.log'
 
       - name: Upload test log
         if: always()
