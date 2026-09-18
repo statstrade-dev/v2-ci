@@ -63,7 +63,7 @@ jobs:
           git config --global --add url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
           git -C v2 submodule sync --recursive
-          git -C v2 submodule update --init --recursive
+          git -C v2 submodule update --init --recursive -- backend-db ref/foundation ref/statstrade-core
 
       - name: Resolve pinned Foundation revision
         id: foundation
