@@ -8,8 +8,8 @@ database-first gate.
 
 The active `.github/workflows/v2-ci.yml` workflow accepts the
 `v2-db-changed` dispatch from `statstrade-dev/v2-db`, checks out the exact
-source commit, installs the pinned Foundation checkout, and runs a three-entry
-matrix:
+source commit, validates `foundation.lock`, installs the exact Foundation
+commit recorded by that lock, and runs a three-entry matrix:
 
 ```sh
 ./lein test :with "[gwdb.common]"
@@ -28,6 +28,18 @@ repository must configure a repository-scoped `GH_TOKEN` secret with
 permission to dispatch the central workflow. The central repository uses its
 own repository-scoped `GH_TOKEN` to check out the private source and publish
 the `v2-ci/gwdb` commit status.
+
+## Version provenance
+
+`v2-db/foundation.lock` is the source-side contract for the Foundation
+repository, immutable ref, commit SHA, and Foundation project version. The
+workflow rejects malformed locks, mismatched checkouts, and Foundation
+version/SHA drift before any selector runs. Each run summary and test artifact
+includes the backend-db version and Foundation version/SHA.
+
+backend-db versioning is independent from Foundation and from Supabase
+deployment. Its `project.clj` version is checked by `v<version>` release
+preflight tags; backend-db is not deployed to Clojars by this workflow.
 
 The test log is retained as a workflow artifact for 14 days. Additional
 database, generated-artifact, service, frontend, documentation, and

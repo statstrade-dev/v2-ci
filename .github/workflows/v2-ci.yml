@@ -24,8 +24,6 @@ concurrency:
 
 env:
   SOURCE_REPOSITORY: statstrade-dev/v2-db
-  FOUNDATION_REPOSITORY: zcaudate-xyz/foundation-base
-  FOUNDATION_SHA: f708e8cfe86371c7abbdbb3bb7cabf0a9c175836
   CI_IMAGE: ghcr.io/zcaudate-xyz/infra-foundation-dev:ci
 
 jobs:
@@ -61,11 +59,37 @@ jobs:
           path: v2-db
           fetch-depth: 1
 
+      - name: Read and validate Foundation lock
+        id: foundation-lock
+        run: |
+          set -euo pipefail
+          ./v2-db/scripts/check-foundation-lock.sh \
+            --lock v2-db/foundation.lock \
+            --resolve-remote \
+            --github-output "$GITHUB_OUTPUT"
+          backend_db_version="$(
+            sed -nE 's/^[[:space:]]*\(defproject[[:space:]]+[^[:space:]]+[[:space:]]+"([^"]+)".*/\1/p' \
+              v2-db/project.clj | head -1
+          )"
+          test -n "$backend_db_version"
+          echo "backend_db_version=$backend_db_version" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize dependency versions
+        run: |
+          {
+            echo "## Dependency versions"
+            echo
+            echo "- backend-db: \`${{ steps.foundation-lock.outputs.backend_db_version }}\`"
+            echo "- Foundation: \`${{ steps.foundation-lock.outputs.foundation_version }}\`"
+            echo "- Foundation ref: \`${{ steps.foundation-lock.outputs.foundation_ref }}\`"
+            echo "- Foundation SHA: \`${{ steps.foundation-lock.outputs.foundation_sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Check out pinned Foundation
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.FOUNDATION_REPOSITORY }}
-          ref: ${{ env.FOUNDATION_SHA }}
+          repository: ${{ steps.foundation-lock.outputs.foundation_repository }}
+          ref: ${{ steps.foundation-lock.outputs.foundation_sha }}
           token: ${{ secrets.GH_TOKEN }}
           path: foundation-base
           fetch-depth: 1
@@ -80,6 +104,9 @@ jobs:
       - name: Install Foundation and link checkout
         run: |
           set -euo pipefail
+          ./v2-db/scripts/check-foundation-lock.sh \
+            --lock v2-db/foundation.lock \
+            --foundation-dir foundation-base
           mkdir -p "$GITHUB_WORKSPACE/v2-db/checkouts" "$HOME/.m2"
           ln -sfn "$GITHUB_WORKSPACE/foundation-base" "$GITHUB_WORKSPACE/v2-db/checkouts/foundation"
           docker pull "$CI_IMAGE"
@@ -98,6 +125,8 @@ jobs:
             -e "CI=true" \
             -e "LEIN_JVM_OPTS=-Xms512m -Xmx3g -XX:+UseG1GC" \
             -e "SELECTOR=${{ matrix.selector }}" \
+            -e "BACKEND_DB_VERSION=${{ steps.foundation-lock.outputs.backend_db_version }}" \
+            -e "FOUNDATION_VERSION=${{ steps.foundation-lock.outputs.foundation_version }}" \
             -e "TEST_LOG=$TEST_LOG" \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -w "$GITHUB_WORKSPACE/v2-db" \
@@ -110,7 +139,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v2-db-${{ matrix.selector }}-test-${{ github.run_id }}
+          name: v2-db-${{ steps.foundation-lock.outputs.backend_db_version }}-${{ matrix.selector }}-foundation-${{ steps.foundation-lock.outputs.foundation_version }}-test-${{ github.run_id }}
           path: v2-db/${{ matrix.selector }}-test.log
           if-no-files-found: warn
           retention-days: 14
