@@ -30,6 +30,19 @@ jobs:
           ref: ${{ inputs.source_ref }}
           token: ${{ secrets.GH_TOKEN }}
           path: v2
+      - name: Initialize pinned source submodules
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f v2/.gitmodules ]]; then
+            exit 0
+          fi
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global http.https://github.com/.extraheader "AUTHORIZATION: bearer ${GH_TOKEN}"
+          git -C v2 submodule sync --recursive
+          git -C v2 submodule update --init --recursive
       - id: foundation
         run: echo "sha=$(git -C v2 ls-tree HEAD ref/foundation | awk '{print $3}')" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
