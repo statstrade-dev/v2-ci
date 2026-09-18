@@ -2,10 +2,12 @@ name: Greenways v2 CI
 
 on:
   repository_dispatch:
-    types: [v2-ci-requested]
+    types: [v2-ci-requested, v2-ci-requested-db, v2-ci-requested-service]
   workflow_dispatch:
     inputs:
       source_ref: {description: 'Branch, tag, or commit in statstrade-dev/v2', required: true, default: main, type: string}
+      run_common: {description: 'Run gwdb.common', required: true, default: true, type: boolean}
+      run_fn: {description: 'Run gwdb.fn', required: true, default: true, type: boolean}
       run_core: {description: 'Run gwdb.core', required: true, default: true, type: boolean}
       run_rpc: {description: 'Run gwdb.rpc', required: true, default: true, type: boolean}
       run_gwbuild: {description: 'Run gwbuild', required: true, default: true, type: boolean}
@@ -28,8 +30,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  gwdb-common:
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_common) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-db' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.gwdb_common == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            (github.event.client_payload.segments.gwdb_common == true ||
+             github.event.client_payload.segments.gwdb_core == true ||
+             github.event.client_payload.segments.gwdb_rpc == true))
+        ))
+      }}
+    uses: ./.github/workflows/_v2-backend-segment.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      source_run_url: ${{ github.event.client_payload.source_run_url || '' }}
+      correlation_id: ${{ github.event.client_payload.correlation_id || format('{0}:{1}', github.run_id, github.run_attempt) }}
+      selectors: gwdb.common
+      segment_name: gwdb.common
+      status_context: v2-ci/gwdb-common
+      artifact_suffix: gwdb-common
+      project_path: backend-db
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
+  gwdb-fn:
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_fn) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-db' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.gwdb_fn == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            (github.event.client_payload.segments.gwdb_fn == true ||
+             github.event.client_payload.segments.gwdb_core == true ||
+             github.event.client_payload.segments.gwdb_rpc == true))
+        ))
+      }}
+    uses: ./.github/workflows/_v2-backend-segment.yml
+    with:
+      source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+      source_ref: ${{ github.event.client_payload.source_sha || inputs.source_ref || 'main' }}
+      source_run_url: ${{ github.event.client_payload.source_run_url || '' }}
+      correlation_id: ${{ github.event.client_payload.correlation_id || format('{0}:{1}', github.run_id, github.run_attempt) }}
+      selectors: gwdb.fn
+      segment_name: gwdb.fn
+      status_context: v2-ci/gwdb-fn
+      artifact_suffix: gwdb-fn
+      project_path: backend-db
+      report_status: ${{ github.event_name == 'repository_dispatch' }}
+    secrets: inherit
+
   gwdb-core:
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_core) || github.event.client_payload.segments.gwdb_core == true
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_core) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-db' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.gwdb_core == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            github.event.client_payload.segments.gwdb_core == true)
+        ))
+      }}
     uses: ./.github/workflows/_v2-backend-segment.yml
     with:
       source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
@@ -45,7 +113,17 @@ jobs:
     secrets: inherit
 
   gwdb-rpc:
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_rpc) || github.event.client_payload.segments.gwdb_rpc == true
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_rpc) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-db' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.gwdb_rpc == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            github.event.client_payload.segments.gwdb_rpc == true)
+        ))
+      }}
     uses: ./.github/workflows/_v2-backend-segment.yml
     with:
       source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
@@ -60,7 +138,17 @@ jobs:
     secrets: inherit
 
   gwbuild:
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_gwbuild) || github.event.client_payload.segments.gwbuild == true
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_gwbuild) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-db' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.gwbuild == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            github.event.client_payload.segments.gwbuild == true)
+        ))
+      }}
     uses: ./.github/workflows/_v2-backend-segment.yml
     with:
       source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
@@ -76,7 +164,17 @@ jobs:
     secrets: inherit
 
   gwlink:
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_gwlink) || github.event.client_payload.segments.gwlink == true
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_gwlink) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-service' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.gwlink == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            github.event.client_payload.segments.gwlink == true)
+        ))
+      }}
     uses: ./.github/workflows/_v2-backend-segment.yml
     with:
       source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
@@ -91,7 +189,17 @@ jobs:
     secrets: inherit
 
   backend-support:
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_backend_support) || github.event.client_payload.segments.backend_support == true
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_backend_support) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-db' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.backend_support == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            github.event.client_payload.segments.backend_support == true)
+        ))
+      }}
     uses: ./.github/workflows/_v2-backend-segment.yml
     with:
       source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
@@ -106,7 +214,17 @@ jobs:
     secrets: inherit
 
   gwlink-js:
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_js) || github.event.client_payload.segments.gwlink_js == true
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_js) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-service' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.gwlink_js == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            github.event.client_payload.segments.gwlink_js == true)
+        ))
+      }}
     uses: ./.github/workflows/_v2-language-build.yml
     with:
       source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
@@ -117,7 +235,17 @@ jobs:
     secrets: inherit
 
   gwlink-dart:
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_dart) || github.event.client_payload.segments.gwlink_dart == true
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_dart) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-service' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.gwlink_dart == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            github.event.client_payload.segments.gwlink_dart == true)
+        ))
+      }}
     uses: ./.github/workflows/_v2-language-build.yml
     with:
       source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
@@ -128,7 +256,17 @@ jobs:
     secrets: inherit
 
   frontend:
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_frontend) || github.event.client_payload.segments.frontend == true
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_frontend) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-service' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.frontend == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            github.event.client_payload.segments.frontend == true)
+        ))
+      }}
     uses: ./.github/workflows/_v2-frontend.yml
     with:
       source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
@@ -138,7 +276,17 @@ jobs:
     secrets: inherit
 
   docs:
-    if: (github.event_name == 'workflow_dispatch' && inputs.run_docs) || github.event.client_payload.segments.docs == true
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_docs) ||
+        (github.event_name == 'repository_dispatch' && (
+          (github.event.action == 'v2-ci-requested-service' &&
+            (github.event.client_payload.segments == null ||
+             github.event.client_payload.segments.docs == true)) ||
+          (github.event.action == 'v2-ci-requested' &&
+            github.event.client_payload.segments.docs == true)
+        ))
+      }}
     uses: ./.github/workflows/_v2-docs.yml
     with:
       source_repository: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
@@ -171,6 +319,8 @@ jobs:
   testing-release:
     name: Deploy persistent testing
     needs:
+      - gwdb-common
+      - gwdb-fn
       - gwdb-core
       - gwdb-rpc
       - gwbuild
@@ -184,6 +334,7 @@ jobs:
       ${{
         always() &&
         github.event_name == 'repository_dispatch' &&
+        github.event.action == 'v2-ci-requested' &&
         github.event.client_payload.source_ref == 'main' &&
         !contains(needs.*.result, 'failure') &&
         !contains(needs.*.result, 'cancelled')

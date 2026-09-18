@@ -1,8 +1,10 @@
 # Greenways CI
 
 `statstrade-dev/v2-ci` runs central validation for exact revisions of
-`statstrade-dev/v2`. The source repository sends one correlated
-`v2-ci-requested` event with schema version 3 and the affected slices.
+`statstrade-dev/v2`. Database and service validation can be dispatched
+independently with `v2-ci-requested-db` and `v2-ci-requested-service`.
+The original `v2-ci-requested` event remains supported while source-side
+dispatchers migrate.
 
 ## V2 slices
 
@@ -10,6 +12,8 @@ The active `.github/workflows/v2-ci.yml` orchestrator exposes independently
 rerunnable jobs and source commit statuses for:
 
 ```text
+gwdb.common
+gwdb.fn
 gwdb.core
 gwdb.rpc
 gwbuild and generated-artifact reproducibility
@@ -30,6 +34,17 @@ SHA.
 Pull requests and `develop` pushes are selected by the V2 source detector.
 Every `main` push and manual full run requests all slices. Unaffected source
 contexts are marked successful without starting central jobs.
+
+`v2-ci-requested-db` runs the database jobs (`gwdb.common`, `gwdb.fn`,
+`gwdb.core`, `gwdb.rpc`, `gwbuild`, and backend support).
+`v2-ci-requested-service` runs the service jobs (`gwlink`, the JavaScript and
+Dart builds, the frontend, and documentation). Both event types accept the
+same `client_payload` shape; when `segments` is omitted, all jobs in the
+corresponding category run. The legacy event continues to use its existing
+segment flags and now also covers `gwdb.common` and `gwdb.fn` when core or RPC
+validation is requested.
+The persistent testing deployment remains attached to the legacy full event
+until the source-side dispatcher is migrated.
 
 ## Statstrade environments
 
