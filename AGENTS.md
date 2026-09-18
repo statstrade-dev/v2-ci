@@ -21,7 +21,8 @@ differ.
 - An authenticated `gh` client with access to this repository and
   `statstrade-dev/v2` for remote runs.
 - Docker and GHCR access for backend and language jobs.
-- Access to the pinned `zcaudate-xyz/foundation-base` revision for those jobs.
+- Access to the Foundation revision recorded by the checked-out backend-db
+  `foundation.lock` for those jobs.
 - Protected `statstrade-dev/dot-secrets` and deployment environment access for
   the environment and production workflows.
 
@@ -52,6 +53,10 @@ focused dispatches are available as `make run-core`, `make run-rpc`,
 `make run-frontend`, and `make run-docs`. These commands require the
 dependencies and access listed above and must not be reported as passed from a
 local checkout alone. Run `git diff --check` for map changes.
+
+The backend-db gate must validate `foundation.lock` before checking out
+Foundation. Do not replace its immutable SHA with a branch, and do not add a
+Clojars publication or database deployment step to version preflight.
 
 ## Generated output and deployment
 
