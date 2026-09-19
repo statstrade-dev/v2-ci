@@ -56,9 +56,8 @@ jobs:
           fi
 
           release_sha="$(
-            git -c "http.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" \
-              ls-remote "https://github.com/${SOURCE_REPOSITORY}.git" refs/heads/release |
-              awk 'NR == 1 {print $1}'
+            gh api "repos/${SOURCE_REPOSITORY}/git/ref/heads/release" \
+              --jq '.object.sha'
           )"
           test "$release_sha" = "$SOURCE_SHA"
 
