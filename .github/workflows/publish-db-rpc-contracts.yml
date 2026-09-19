@@ -1,0 +1,163 @@
+name: Publish V2 DB RPC contracts
+
+on:
+  repository_dispatch:
+    types:
+      - v2-db-rpc-contracts
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact commit SHA in statstrade-dev/v2-db
+        required: true
+        type: string
+      source_ref:
+        description: Source ref containing the requested commit
+        required: false
+        default: release
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-db-rpc-contracts-${{ github.event.client_payload.source_sha || inputs.source_sha || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: statstrade-dev/v2-db
+  SOURCE_SHA: ${{ github.event.client_payload.source_sha || inputs.source_sha }}
+  SOURCE_REF: ${{ github.event.client_payload.source_ref || inputs.source_ref || 'release' }}
+  SOURCE_RUN_ID: ${{ github.event.client_payload.source_run_id || '' }}
+  SOURCE_RUN_URL: ${{ github.event.client_payload.source_run_url || '' }}
+  CI_IMAGE: ghcr.io/zcaudate-xyz/infra-foundation-dev:ci
+
+jobs:
+  publish:
+    name: Publish release RPC API and view contracts
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        github.event.action == 'v2-db-rpc-contracts'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate release source request
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          test "$SOURCE_REPOSITORY" = "statstrade-dev/v2-db"
+          test "$SOURCE_REF" = "release"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ -n "$SOURCE_RUN_ID" ]]; then
+            [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          fi
+
+          release_sha="$(
+            git -c "http.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" \
+              ls-remote "https://github.com/${SOURCE_REPOSITORY}.git" refs/heads/release |
+              awk 'NR == 1 {print $1}'
+          )"
+          test "$release_sha" = "$SOURCE_SHA"
+
+      - name: Check out exact backend-db release source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_SHA }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: v2-db
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Read and validate Foundation lock
+        id: foundation-lock
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git -C v2-db rev-parse HEAD)"
+          test "$checked_out_sha" = "$SOURCE_SHA"
+          ./v2-db/scripts/check-foundation-lock.sh \
+            --lock v2-db/foundation.lock \
+            --resolve-remote \
+            --github-output "$GITHUB_OUTPUT"
+          backend_db_version="$(
+            sed -nE 's/^[[:space:]]*\(defproject[[:space:]]+[^[:space:]]+[[:space:]]+"([^"]+)".*/\1/p' \
+              v2-db/project.clj | head -1
+          )"
+          [[ "$backend_db_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          [[ "$backend_db_version" != *SNAPSHOT* ]]
+          echo "backend_db_version=$backend_db_version" >> "$GITHUB_OUTPUT"
+          echo "BACKEND_DB_VERSION=$backend_db_version" >> "$GITHUB_ENV"
+
+      - name: Check out pinned Foundation
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.foundation-lock.outputs.foundation_repository }}
+          ref: ${{ steps.foundation-lock.outputs.foundation_sha }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: foundation-base
+          fetch-depth: 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Install pinned Foundation and link checkout
+        run: |
+          set -euo pipefail
+          ./v2-db/scripts/check-foundation-lock.sh \
+            --lock v2-db/foundation.lock \
+            --foundation-dir foundation-base
+          mkdir -p "$GITHUB_WORKSPACE/v2-db/checkouts" "$HOME/.m2"
+          ln -sfn "$GITHUB_WORKSPACE/foundation-base" \
+            "$GITHUB_WORKSPACE/v2-db/checkouts/foundation"
+          docker pull "$CI_IMAGE"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE/foundation-base" \
+            -v "$HOME/.m2:/root/.m2" \
+            "$CI_IMAGE" \
+            bash -lc 'set -o pipefail; java -version; lein install 2>&1 | tee foundation-install.log'
+
+      - name: Generate and stage versioned RPC publication
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e CI=true \
+            -e "SOURCE_SHA=$SOURCE_SHA" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -w "$GITHUB_WORKSPACE/v2-db" \
+            -v "$HOME/.m2:/root/.m2" \
+            "$CI_IMAGE" \
+            bash -lc 'set -o pipefail; ./scripts/publish-rpc-api.sh \
+              --ci --source-ref release --source-sha "$SOURCE_SHA" \
+              2>&1 | tee rpc-api-publication.log'
+
+      - name: Write publication summary
+        run: |
+          set -euo pipefail
+          publication_dir="v2-db/target/rpc-publication/$BACKEND_DB_VERSION"
+          api_sha256="$(sha256sum "$publication_dir/rpc-api.json" | awk '{print $1}')"
+          view_sha256="$(sha256sum "$publication_dir/rpc-view.json" | awk '{print $1}')"
+          {
+            echo '## V2 DB RPC contract publication'
+            echo
+            printf -- '- source: `%s@%s`\n' "$SOURCE_REPOSITORY" "$SOURCE_SHA"
+            printf -- '- source ref: `%s`\n' "$SOURCE_REF"
+            printf -- '- backend-db version: `%s`\n' "$BACKEND_DB_VERSION"
+            printf -- '- rpc-api.json SHA-256: `%s`\n' "$api_sha256"
+            printf -- '- rpc-view.json SHA-256: `%s`\n' "$view_sha256"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload versioned RPC contract artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpc-contracts-backend-db-${{ steps.foundation-lock.outputs.backend_db_version }}-${{ env.SOURCE_SHA }}
+          path: ${{ github.workspace }}/v2-db/target/rpc-publication/${{ steps.foundation-lock.outputs.backend_db_version }}
+          if-no-files-found: error
+          retention-days: 14

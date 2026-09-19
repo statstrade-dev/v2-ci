@@ -48,11 +48,15 @@ this first test command.
 
 ## RPC contract publication
 
-`.github/workflows/publish-rpc-contracts.yml` publishes the database-owned RPC
+`.github/workflows/publish-rpc-contracts.yml` continues to publish the
+database-owned contracts for exact `statstrade-dev/v2` source revisions
+requested by the existing V2 contract events.
+
+`.github/workflows/publish-db-rpc-contracts.yml` publishes the backend-db
 contracts for an exact `statstrade-dev/v2-db` release commit. The central DB
-gate requests publication only after all DB selectors pass and only when the
-source ref is `release`. The publisher independently verifies that the exact
-SHA is the current `release` ref before checking it out.
+gate requests this publication only after all DB selectors pass and only when
+the source ref is `release`. The publisher independently verifies that the
+exact SHA is the current `release` ref before checking it out.
 
 The uploaded `rpc-contracts-backend-db-<version>-<source_sha>` artifact contains:
 
