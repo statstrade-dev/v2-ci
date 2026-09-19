@@ -46,6 +46,26 @@ database, generated-artifact, service, frontend, documentation, and
 deployment gates will be added as separate slices rather than hidden behind
 this first test command.
 
+## RPC contract publication
+
+`.github/workflows/publish-rpc-contracts.yml` publishes the database-owned RPC
+contracts for an exact `statstrade-dev/v2` commit. It accepts the existing
+`v2-ci-requested` dispatch when the `gwdb_rpc` segment is selected, the
+explicit `v2-rpc-contracts` dispatch, or a manual workflow dispatch with a
+40-character `source_sha`.
+
+The uploaded `rpc-contracts-<source_sha>` artifact contains:
+
+- `rpc-api.json`, copied from the database OpenAPI publication;
+- `rpc-view.json`, copied from the database view publication or derived from
+  the API's `x-gwlink.views` extension when that is the source format;
+- `provenance.json`, containing the exact V2 and backend-db revisions and
+  SHA-256 digests.
+
+The workflow checks out the requested V2 commit and its pinned `backend-db`
+gitlink before reading either publication. It does not write back to V2 or
+publish credentials.
+
 ## License
 
 Private and proprietary to Greenways AI.

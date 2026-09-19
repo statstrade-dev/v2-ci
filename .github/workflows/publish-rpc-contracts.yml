@@ -1,0 +1,214 @@
+name: Publish V2 RPC contracts
+
+on:
+  repository_dispatch:
+    types:
+      - v2-ci-requested
+      - v2-rpc-contracts
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact commit SHA in statstrade-dev/v2
+        required: true
+        type: string
+      source_ref:
+        description: Source ref containing the requested commit
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-rpc-contracts-${{ github.event.client_payload.source_sha || inputs.source_sha || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: ${{ github.event.client_payload.source_repository || 'statstrade-dev/v2' }}
+  SOURCE_SHA: ${{ github.event.client_payload.source_sha || inputs.source_sha }}
+  SOURCE_REF: ${{ github.event.client_payload.source_ref || inputs.source_ref || 'main' }}
+  SOURCE_RUN_ID: ${{ github.event.client_payload.source_run_id || '' }}
+  SOURCE_RUN_URL: ${{ github.event.client_payload.source_run_url || '' }}
+
+jobs:
+  publish:
+    name: Publish RPC API and view contracts
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        github.event.action == 'v2-rpc-contracts' ||
+        github.event.client_payload.publish_rpc == true ||
+        github.event.client_payload.segments.gwdb_rpc == true
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate source request
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          test "$SOURCE_REPOSITORY" = "statstrade-dev/v2"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test -n "$SOURCE_REF"
+          if [[ -n "$SOURCE_RUN_ID" ]]; then
+            [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          fi
+
+      - name: Check out exact V2 source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_SHA }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: v2
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Initialize the pinned database source
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git -C v2 rev-parse HEAD)"
+          test "$checked_out_sha" = "$SOURCE_SHA"
+
+          expected_backend_db_sha="$(git -C v2 ls-tree HEAD backend-db | awk '{print $3}')"
+          [[ "$expected_backend_db_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          # The V2 source owns this gitlink. Use a runner-local HTTPS override
+          # so the private submodule can be fetched without changing source.
+          git -C v2 config submodule.backend-db.url https://github.com/statstrade-dev/v2-db.git
+          git -C v2 -c "http.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" \
+            submodule update --init backend-db
+
+          actual_backend_db_sha="$(git -C v2/backend-db rev-parse HEAD)"
+          test "$actual_backend_db_sha" = "$expected_backend_db_sha"
+          echo "BACKEND_DB_SHA=$actual_backend_db_sha" >> "$GITHUB_ENV"
+
+      - name: Stage and validate RPC publications
+        id: publication
+        run: |
+          set -euo pipefail
+          publication_dir="$RUNNER_TEMP/rpc-contracts"
+          mkdir -p "$publication_dir"
+
+          api_source=""
+          for candidate in \
+            v2/backend-db/resources/gwdb/openapi/rpc-api.json \
+            v2/backend-db/resources/gwdb/rpc-api.json; do
+            if [[ -f "$candidate" ]]; then
+              api_source="$candidate"
+              break
+            fi
+          done
+          test -n "$api_source" || {
+            echo 'No database-owned rpc-api.json publication was found.' >&2
+            exit 1
+          }
+          test ! -L "$api_source"
+          test -s "$api_source"
+          jq -e '
+            type == "object" and
+            (.openapi | type == "string") and
+            (.paths | type == "object") and
+            (.components | type == "object")
+          ' "$api_source" > /dev/null
+          cp "$api_source" "$publication_dir/rpc-api.json"
+
+          view_source=""
+          for candidate in \
+            v2/backend-db/resources/gwdb/gwlink/views.json \
+            v2/backend-db/resources/gwdb/rpc-views.json \
+            v2/backend-db/resources/gwdb/openapi/rpc-view.json \
+            v2/backend-db/resources/gwdb/openapi/rpc-views.json; do
+            if [[ -f "$candidate" ]]; then
+              view_source="$candidate"
+              break
+            fi
+          done
+
+          if [[ -n "$view_source" ]]; then
+            test ! -L "$view_source"
+            test -s "$view_source"
+            cp "$view_source" "$publication_dir/rpc-view.json"
+          else
+            # Older database publications carry the view descriptors in the
+            # x-gwlink extension of rpc-api.json. Keep the published artifact
+            # name stable while retaining that source-owned payload.
+            jq -e '
+              (."x-gwlink" | type == "object") and
+              (."x-gwlink".views | (type == "object" or type == "array"))
+            ' "$api_source" > /dev/null
+            jq '{version: (."x-gwlink".version // 1), views: ."x-gwlink".views}' \
+              "$api_source" > "$publication_dir/rpc-view.json"
+            view_source="derived from $api_source (.x-gwlink.views)"
+          fi
+
+          jq -e '
+            type == "object" and
+            (.version == 1) and
+            (.views | (type == "object" or type == "array"))
+          ' "$publication_dir/rpc-view.json" > /dev/null
+
+          api_sha256="$(sha256sum "$publication_dir/rpc-api.json" | awk '{print $1}')"
+          view_sha256="$(sha256sum "$publication_dir/rpc-view.json" | awk '{print $1}')"
+          jq -n \
+            --arg source_repository "$SOURCE_REPOSITORY" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg source_ref "$SOURCE_REF" \
+            --arg source_run_id "$SOURCE_RUN_ID" \
+            --arg source_run_url "$SOURCE_RUN_URL" \
+            --arg backend_db_sha "$BACKEND_DB_SHA" \
+            --arg api_source "$api_source" \
+            --arg view_source "$view_source" \
+            --arg api_sha256 "$api_sha256" \
+            --arg view_sha256 "$view_sha256" \
+            '{
+              version: 1,
+              source_repository: $source_repository,
+              source_sha: $source_sha,
+              source_ref: $source_ref,
+              source_run_id: (if $source_run_id == "" then null else ($source_run_id | tonumber) end),
+              source_run_url: (if $source_run_url == "" then null else $source_run_url end),
+              backend_db_sha: $backend_db_sha,
+              artifacts: {
+                "rpc-api.json": {source: $api_source, sha256: $api_sha256},
+                "rpc-view.json": {source: $view_source, sha256: $view_sha256}
+              }
+            }' > "$publication_dir/provenance.json"
+
+          {
+            echo "api_source=$api_source"
+            echo "view_source=$view_source"
+            echo "api_sha256=$api_sha256"
+            echo "view_sha256=$view_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write publication summary
+        env:
+          API_SOURCE: ${{ steps.publication.outputs.api_source }}
+          VIEW_SOURCE: ${{ steps.publication.outputs.view_source }}
+          API_SHA256: ${{ steps.publication.outputs.api_sha256 }}
+          VIEW_SHA256: ${{ steps.publication.outputs.view_sha256 }}
+        run: |
+          {
+            echo '## V2 RPC contract publication'
+            echo
+            printf -- '- source: `%s@%s`\n' "$SOURCE_REPOSITORY" "$SOURCE_SHA"
+            printf -- '- backend-db: `%s`\n' "$BACKEND_DB_SHA"
+            printf -- '- API source: `%s`\n' "$API_SOURCE"
+            printf -- '- view source: `%s`\n' "$VIEW_SOURCE"
+            printf -- '- rpc-api.json SHA-256: `%s`\n' "$API_SHA256"
+            printf -- '- rpc-view.json SHA-256: `%s`\n' "$VIEW_SHA256"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload RPC contract artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpc-contracts-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/rpc-contracts
+          if-no-files-found: error
+          retention-days: 14
