@@ -126,6 +126,8 @@ jobs:
       - name: Generate and stage versioned RPC publication
         run: |
           set -euo pipefail
+          # The mounted checkout retains runner ownership while the image
+          # runs as root. Trust only this exact worktree before Git checks it.
           docker run --rm \
             -e CI=true \
             -e "SOURCE_SHA=$SOURCE_SHA" \
@@ -133,9 +135,12 @@ jobs:
             -w "$GITHUB_WORKSPACE/v2-db" \
             -v "$HOME/.m2:/root/.m2" \
             "$CI_IMAGE" \
-            bash -lc 'set -o pipefail; ./scripts/publish-rpc-api.sh \
+            bash -lc 'set -o pipefail
+              git config --global --add safe.directory "$PWD"
+              ./scripts/publish-rpc-api.sh \
               --ci --source-ref release --source-sha "$SOURCE_SHA" \
-              2>&1 | tee rpc-api-publication.log'
+              2>&1 | tee rpc-api-publication.log
+            '
 
       - name: Write publication summary
         run: |
