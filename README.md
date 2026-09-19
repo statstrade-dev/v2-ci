@@ -49,22 +49,22 @@ this first test command.
 ## RPC contract publication
 
 `.github/workflows/publish-rpc-contracts.yml` publishes the database-owned RPC
-contracts for an exact `statstrade-dev/v2` commit. It accepts the existing
-`v2-ci-requested` dispatch when the `gwdb_rpc` segment is selected, the
-explicit `v2-rpc-contracts` dispatch, or a manual workflow dispatch with a
-40-character `source_sha`.
+contracts for an exact `statstrade-dev/v2-db` release commit. The central DB
+gate requests publication only after all DB selectors pass and only when the
+source ref is `release`. The publisher independently verifies that the exact
+SHA is the current `release` ref before checking it out.
 
-The uploaded `rpc-contracts-<source_sha>` artifact contains:
+The uploaded `rpc-contracts-backend-db-<version>-<source_sha>` artifact contains:
 
-- `rpc-api.json`, copied from the database OpenAPI publication;
-- `rpc-view.json`, copied from the database view publication or derived from
-  the API's `x-gwlink.views` extension when that is the source format;
-- `provenance.json`, containing the exact V2 and backend-db revisions and
+- `rpc-api.json` and `rpc-api-<version>.json`;
+- `rpc-view.json` and `rpc-view-<version>.json`;
+- `provenance.json`, containing the exact backend-db release SHA, version, and
   SHA-256 digests.
 
-The workflow checks out the requested V2 commit and its pinned `backend-db`
-gitlink before reading either publication. It does not write back to V2 or
-publish credentials.
+The source-side `backend-db` Makefile invokes
+`gwbuild.db.gen-rpc-json` directly. `make rpc-api-publish` stages a local
+bundle, while `make rpc-api-dispatch` requests the protected central DB gate;
+neither path publishes credentials or adds a provider/package release path.
 
 ## License
 
