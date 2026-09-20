@@ -46,6 +46,21 @@ database, generated-artifact, service, frontend, documentation, and
 deployment gates will be added as separate slices rather than hidden behind
 this first test command.
 
+## Protected v2-db database release
+
+`.github/workflows/v2-db-database-release.yml` accepts an explicit
+`statstrade-dev/v2-db` source ref and commit. It checks out that exact commit,
+verifies that the named ref still points to it, validates the source
+Foundation lock, and records migration and source provenance in a run
+artifact.
+
+Production requests are restricted to `main` and `incremental` mode. The
+protected `statstrade-database-production` environment supplies the
+allowlisted database configuration, and the workflow applies only
+`docker/gw-db/supabase/migrations` with `supabase db push`; it never applies a
+full SQL snapshot to production. Testing remains a separate protected reset
+path.
+
 ## RPC contract publication
 
 `.github/workflows/publish-rpc-contracts.yml` continues to publish the
