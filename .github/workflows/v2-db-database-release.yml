@@ -116,6 +116,26 @@ jobs:
           fi
           test "$remote_sha" = "$SOURCE_SHA"
 
+      - name: Require successful source preflight
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          preflight="$(
+            gh api "repos/${SOURCE_REPOSITORY}/commits/${SOURCE_SHA}/statuses?per_page=100" \
+              --paginate \
+              --jq '.[] | select(.context == "v2-ci/gwdb") | [.state, .target_url] | @tsv' \
+              | sed -n '1p'
+          )"
+          preflight_state="${preflight%%$'\t'*}"
+          [[ "$preflight_state" == success ]] || {
+            echo "v2-ci/gwdb preflight is not successful for $SOURCE_REPOSITORY@$SOURCE_SHA" >&2
+            printf 'observed preflight: %s\n' "${preflight:-missing}" >&2
+            exit 2
+          }
+          printf 'source preflight: %s\n' "$preflight"
+
       - name: Validate source Foundation lock
         id: source-lock
         working-directory: source
@@ -170,8 +190,6 @@ jobs:
             "$CI_IMAGE" bash -lc '
               set -euo pipefail
               cd source
-              ./lein check
-              ./lein test :in gwdb
               ./lein sql
             '
           migration_root="source/docker/gw-db/supabase/migrations"
@@ -466,5 +484,8 @@ jobs:
           rm -rf -- "$RUNNER_TEMP/database-secrets"
           rm -f -- "$RUNNER_TEMP/dot-secrets-key" "$RUNNER_TEMP/dot-secrets-known-hosts"
           rm -f -- "$RUNNER_TEMP/database-identity-check.log"
-          rm -rf -- "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/foundation" "$GITHUB_WORKSPACE/ci"
-          rm -rf -- "$GITHUB_WORKSPACE/main/sql"
+          if command -v sudo >/dev/null 2>&1; then
+            sudo rm -rf -- "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/foundation" "$GITHUB_WORKSPACE/ci" "$GITHUB_WORKSPACE/main/sql"
+          else
+            rm -rf -- "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/foundation" "$GITHUB_WORKSPACE/ci" "$GITHUB_WORKSPACE/main/sql"
+          fi
