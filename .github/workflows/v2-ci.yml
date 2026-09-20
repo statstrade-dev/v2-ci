@@ -145,7 +145,7 @@ jobs:
           retention-days: 14
 
   request-rpc-publication:
-    name: Request release RPC publication
+    name: Request release database exports
     needs: test
     if: >-
       ${{
@@ -168,11 +168,11 @@ jobs:
           github-token: ${{ secrets.GH_TOKEN }}
           script: |
             if (process.env.SOURCE_REF !== 'release') {
-              core.setFailed(`RPC publication requires release, got ${process.env.SOURCE_REF}`);
+              core.setFailed(`Database export publication requires release, got ${process.env.SOURCE_REF}`);
               return;
             }
             if (!/^[0-9a-f]{40}$/.test(process.env.SOURCE_SHA)) {
-              core.setFailed('RPC publication requires a 40-character source SHA');
+              core.setFailed('Database export publication requires a 40-character source SHA');
               return;
             }
             await github.rest.repos.createDispatchEvent({
