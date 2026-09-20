@@ -142,6 +142,13 @@ jobs:
               2>&1 | tee database-export-publication.log
             '
 
+      - name: Restore release worktree ownership
+        run: |
+          set -euo pipefail
+          # The CI image runs as root against the mounted checkout. Restore
+          # runner ownership before the host-side release script stages again.
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/v2-db/target"
+
       - name: Write database export summary
         run: |
           set -euo pipefail
