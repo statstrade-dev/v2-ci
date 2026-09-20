@@ -46,6 +46,21 @@ database, generated-artifact, service, frontend, documentation, and
 deployment gates will be added as separate slices rather than hidden behind
 this first test command.
 
+## Protected v2-db database release
+
+`.github/workflows/v2-db-database-release.yml` accepts an explicit
+`statstrade-dev/v2-db` source ref and commit. It checks out that exact commit,
+verifies that the named ref still points to it, validates the source
+Foundation lock, and records migration and source provenance in a run
+artifact.
+
+Production requests are restricted to `main` and `incremental` mode. The
+protected `statstrade-database-production` environment supplies the
+allowlisted database configuration, and the workflow applies only
+`docker/gw-db/supabase/migrations` with `supabase db push`; it never applies a
+full SQL snapshot to production. Testing remains a separate protected reset
+path.
+
 ## Database publication exports
 
 `.github/workflows/publish-rpc-contracts.yml` continues to publish the
@@ -70,10 +85,9 @@ only:
 The source-side `backend-db` Makefile invokes
 `gwbuild.db.gen-rpc-exports` directly. `make rpc-api-publish` stages the two
 database exports locally, while `make rpc-api-dispatch` requests the protected
-central DB gate;
-`make rpc-api-release` performs the same release checks locally. The central
-publisher requires a `V2_DB_RELEASE_TOKEN` secret with write access to
-`statstrade-dev/v2-db` contents and read access to its commit statuses.
+central DB gate; `make rpc-api-release` performs the same release checks locally.
+The central publisher requires a `V2_DB_RELEASE_TOKEN` secret with write access
+to `statstrade-dev/v2-db` contents and read access to its commit statuses.
 Neither path publishes credentials or adds a provider/package release path.
 
 ## License

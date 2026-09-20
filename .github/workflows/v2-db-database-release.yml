@@ -1,0 +1,478 @@
+name: Deploy v2-db database release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Source branch whose tip must equal source_sha
+        required: true
+        default: main
+        type: string
+      source_sha:
+        description: Exact v2-db commit to validate and deploy
+        required: true
+        type: string
+      target:
+        description: Supabase target
+        required: true
+        default: testing
+        type: choice
+        options:
+          - testing
+          - production
+      mode:
+        description: Database delivery mode
+        required: true
+        default: reset
+        type: choice
+        options:
+          - reset
+          - incremental
+      secrets_ref:
+        description: Exact or approved statstrade-dev/dot-secrets ref
+        required: true
+        default: main
+        type: string
+      foundation_sha:
+        description: Foundation SHA from the v2-db foundation lock
+        required: true
+        default: 8191da1d993d0498db916a7cea1242ebdfebfbe7
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-db-database-release-${{ inputs.target }}
+  cancel-in-progress: false
+
+env:
+  CI_IMAGE: ghcr.io/zcaudate-xyz/infra-foundation-dev:ci
+  SOURCE_REPOSITORY: statstrade-dev/v2-db
+  SOURCE_REF: ${{ inputs.source_ref }}
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  TARGET: ${{ inputs.target }}
+  MODE: ${{ inputs.mode }}
+  SECRETS_REF: ${{ inputs.secrets_ref }}
+  FOUNDATION_SHA: ${{ inputs.foundation_sha }}
+
+jobs:
+  release:
+    name: ${{ inputs.target }} ${{ inputs.mode }} database release
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment:
+      name: ${{ inputs.target == 'production' && 'statstrade-database-production' || 'statstrade-database-testing' }}
+    steps:
+      - name: Check out central orchestration
+        uses: actions/checkout@v4
+        with:
+          path: ci
+          persist-credentials: false
+
+      - name: Validate release request
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          TARGET: ${{ inputs.target }}
+          MODE: ${{ inputs.mode }}
+        run: node ci/.github/scripts/validate-database-release.mjs
+
+      - name: Validate repository and secrets refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SOURCE_REPOSITORY" = "statstrade-dev/v2-db"
+          [[ "$SOURCE_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+          [[ "$SOURCE_REF" != *..* ]]
+          [[ "$SECRETS_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+          [[ "$SECRETS_REF" != *..* ]]
+          git check-ref-format "refs/heads/$SECRETS_REF" ||
+            git check-ref-format "refs/tags/$SECRETS_REF"
+          [[ "$FOUNDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out exact v2-db source
+        uses: actions/checkout@v4
+        with:
+          repository: statstrade-dev/v2-db
+          ref: ${{ inputs.source_sha }}
+          token: ${{ secrets.GH_TOKEN }}
+          fetch-depth: 0
+          path: source
+          persist-credentials: false
+
+      - name: Verify source ref identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          source_url="https://x-access-token:${GH_TOKEN}@github.com/${SOURCE_REPOSITORY}.git"
+          remote_sha="$(git ls-remote "$source_url" "refs/heads/$SOURCE_REF" | awk 'NR == 1 {print $1}')"
+          if [[ -z "$remote_sha" ]]; then
+            remote_sha="$(git ls-remote "$source_url" "refs/tags/$SOURCE_REF^{}" | awk 'NR == 1 {print $1}')"
+          fi
+          test "$remote_sha" = "$SOURCE_SHA"
+
+      - name: Require successful source preflight
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          preflight="$(
+            gh api "repos/${SOURCE_REPOSITORY}/commits/${SOURCE_SHA}/statuses?per_page=100" \
+              --paginate \
+              --jq '.[] | select(.context == "v2-ci/gwdb") | [.state, .target_url] | @tsv' \
+              | sed -n '1p'
+          )"
+          preflight_state="${preflight%%$'\t'*}"
+          [[ "$preflight_state" == success ]] || {
+            echo "v2-ci/gwdb preflight is not successful for $SOURCE_REPOSITORY@$SOURCE_SHA" >&2
+            printf 'observed preflight: %s\n' "${preflight:-missing}" >&2
+            exit 2
+          }
+          printf 'source preflight: %s\n' "$preflight"
+
+      - name: Validate source Foundation lock
+        id: source-lock
+        working-directory: source
+        run: |
+          set -euo pipefail
+          ./scripts/check-foundation-lock.sh \
+            --lock foundation.lock \
+            --resolve-remote \
+            --github-output "$GITHUB_OUTPUT"
+          test "$FOUNDATION_SHA" = "$(sed -n 's/^foundation_sha=//p' "$GITHUB_OUTPUT" | tail -n 1)"
+
+      - name: Check out pinned Foundation
+        uses: actions/checkout@v4
+        with:
+          repository: zcaudate-xyz/foundation-base
+          ref: ${{ inputs.foundation_sha }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: foundation
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Configure release image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$CI_IMAGE"
+
+      - name: Validate checked-in v2-db artifacts
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          migration_root="source/docker/gw-db/supabase/migrations"
+          test -d "$migration_root"
+          migration_digest="$(
+            find "$migration_root" -type f -print0 |
+              sort -z |
+              xargs -0 sha256sum |
+              sha256sum |
+              awk '{print $1}'
+          )"
+          full_sql="source/resources/gwdb/gwdb-full.sql"
+          full_edn="source/resources/gwdb/gwdb-full.edn"
+          test -s "$full_sql"
+          test -s "$full_edn"
+          grep -q '^CREATE SCHEMA IF NOT EXISTS' "$full_sql"
+          grep -q -- '-- gwdb.deploy.scaffold-000-dev/__init__' "$full_sql"
+          head -c 256 "$full_edn" | grep -q 'postgres\.typed'
+          artifact_digest="$({
+            sha256sum "$full_sql"
+            sha256sum "$full_edn"
+          } | sha256sum | awk '{print $1}')"
+          {
+            echo "migration_digest=$migration_digest"
+            echo "artifact_digest=$artifact_digest"
+            echo "foundation_sha=$FOUNDATION_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure dot-secrets checkout
+        id: secrets
+        shell: bash
+        env:
+          DOT_SECRETS_DEPLOY_KEY_B64: ${{ secrets.DOT_SECRETS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          [[ -n "$DOT_SECRETS_DEPLOY_KEY_B64" ]]
+          key="$RUNNER_TEMP/dot-secrets-key"
+          known_hosts="$RUNNER_TEMP/dot-secrets-known-hosts"
+          install -m 600 /dev/null "$key"
+          printf '%s' "$DOT_SECRETS_DEPLOY_KEY_B64" | base64 --decode > "$key"
+          ssh-keygen -y -f "$key" > /dev/null
+          printf '%s\n' \
+            'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+            > "$known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes"
+          directory="$RUNNER_TEMP/dot-secrets"
+          git init -q "$directory"
+          git -C "$directory" remote add origin git@github.com:statstrade-dev/dot-secrets.git
+          git -C "$directory" fetch --depth=1 origin "$SECRETS_REF"
+          git -C "$directory" checkout -q --detach FETCH_HEAD
+          echo "directory=$directory" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git -C "$directory" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [[ "$TARGET" == production ]]; then
+            secrets_directory="$directory/statstrade/v2-db/prod"
+            database_directory="$directory/statstrade/prod"
+            test -f "$secrets_directory/supabase.env"
+            test -f "$database_directory/database.env"
+          else
+            secrets_directory="$directory/statstrade/v2-db/testing"
+            test -f "$secrets_directory/supabase.env"
+          fi
+          filtered_directory="$RUNNER_TEMP/database-secrets"
+          install -d -m 700 "$filtered_directory"
+          if [[ "$TARGET" == production ]]; then
+            for file in "$secrets_directory/supabase.env" "$database_directory/database.env"; do
+              output="$filtered_directory/$(basename "$file")"
+              awk -F= '
+                $1 ~ /^(SUPABASE_PROJECT_REF|SUPABASE_URL|DATABASE_URL|POSTGRES_DB)$/ {print}
+              ' "$file" > "$output"
+              chmod 600 "$output"
+            done
+          else
+            install -m 600 "$secrets_directory/supabase.env" \
+              "$filtered_directory/supabase.env"
+          fi
+          echo "secrets_directory=$filtered_directory" >> "$GITHUB_OUTPUT"
+          echo "profile=$secrets_directory" >> "$GITHUB_OUTPUT"
+
+      - name: Load allowlisted database configuration
+        id: provider-secrets
+        shell: bash
+        env:
+          SECRETS_DIRECTORY: ${{ steps.secrets.outputs.secrets_directory }}
+        run: |
+          set -euo pipefail
+          contract=ci/.github/config/statstrade-database-secrets.json
+          if [[ "$TARGET" == testing ]]; then
+            contract=ci/.github/config/statstrade-v2-db-testing-secrets.json
+          fi
+          node ci/.github/scripts/load-env-files.mjs \
+            "$SECRETS_DIRECTORY" \
+            "$contract"
+
+      - name: Verify target database identity
+        shell: bash
+        env:
+          PRODUCTION_DATABASE_URL: ${{ steps.provider-secrets.outputs.DATABASE_URL }}
+          SUPABASE_PROJECT_REF: ${{ steps.provider-secrets.outputs.SUPABASE_PROJECT_REF }}
+          SUPABASE_URL: ${{ steps.provider-secrets.outputs.SUPABASE_URL }}
+          EXPECTED_DATABASE: ${{ steps.provider-secrets.outputs.POSTGRES_DB }}
+          TESTING_PROJECT_URL: ${{ steps.provider-secrets.outputs.SUPABASE_DB_URL }}
+          TESTING_DATABASE_PASSWORD: ${{ steps.provider-secrets.outputs.SUPABASE_DB_PASS }}
+          SECRETS_PROFILE: ${{ steps.secrets.outputs.profile }}
+        run: |
+          set -euo pipefail
+          case "$TARGET:$MODE" in
+            testing:reset)
+              [[ "$SECRETS_PROFILE" == */statstrade/v2-db/testing ]]
+              project_host="${TESTING_PROJECT_URL#https://}"
+              project_host="${project_host#http://}"
+              project_host="${project_host%%/*}"
+              project_ref="${project_host%%.*}"
+              [[ "$project_host" == "$project_ref.supabase.co" ]]
+              database_url="postgresql://postgres@db.${project_host}:5432/postgres"
+              expected_database=postgres
+              export PGPASSWORD="$TESTING_DATABASE_PASSWORD"
+              ;;
+            production:incremental)
+              [[ "$SECRETS_PROFILE" == */statstrade/v2-db/prod ]]
+              url_host="${SUPABASE_URL#https://}"
+              url_host="${url_host#http://}"
+              url_host="${url_host%%/*}"
+              [[ "$url_host" == "$SUPABASE_PROJECT_REF.supabase.co" ]]
+              database_url="$PRODUCTION_DATABASE_URL"
+              expected_database="$EXPECTED_DATABASE"
+              ;;
+            *)
+              echo 'Unsupported database target/mode combination.' >&2
+              exit 2
+              ;;
+          esac
+          export DATABASE_URL="$database_url"
+          if ! actual_database="$(
+            docker run --rm --network host \
+              -e DATABASE_URL \
+              -e PGPASSWORD \
+              "$CI_IMAGE" bash -lc \
+              'psql "$DATABASE_URL" -At -v ON_ERROR_STOP=1 -c "select current_database()"' \
+              2>"$RUNNER_TEMP/database-identity-check.log"
+          )"; then
+            echo 'Database identity/connectivity check failed.' >&2
+            exit 2
+          fi
+          if [[ "$actual_database" != "$expected_database" ]]; then
+            echo 'Connected database does not match the configured target.' >&2
+            exit 2
+          fi
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.33.10
+
+      - name: Apply database delivery
+        shell: bash
+        env:
+          PRODUCTION_DATABASE_URL: ${{ steps.provider-secrets.outputs.DATABASE_URL }}
+          TESTING_PROJECT_URL: ${{ steps.provider-secrets.outputs.SUPABASE_DB_URL }}
+          TESTING_DATABASE_PASSWORD: ${{ steps.provider-secrets.outputs.SUPABASE_DB_PASS }}
+        run: |
+          set -euo pipefail
+          cd source
+          if [[ "$TARGET" == testing ]]; then
+            project_host="${TESTING_PROJECT_URL#https://}"
+            project_host="${project_host#http://}"
+            project_host="${project_host%%/*}"
+            export PGPASSWORD="$TESTING_DATABASE_PASSWORD"
+            export DATABASE_URL="postgresql://postgres@db.${project_host}:5432/postgres"
+          else
+            export DATABASE_URL="$PRODUCTION_DATABASE_URL"
+          fi
+          case "$TARGET:$MODE" in
+            testing:reset)
+              supabase db reset --db-url "$DATABASE_URL" --no-seed --yes --workdir docker/gw-db
+              ;;
+            production:incremental)
+              supabase db push --db-url "$DATABASE_URL" --include-all --yes --workdir docker/gw-db
+              ;;
+            *)
+              echo "Unsupported target/mode combination." >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Write deployment manifest
+        if: always()
+        shell: bash
+        env:
+          FOUNDATION_SHA: ${{ steps.build.outputs.foundation_sha }}
+          MIGRATION_DIGEST: ${{ steps.build.outputs.migration_digest }}
+          ARTIFACT_DIGEST: ${{ steps.build.outputs.artifact_digest }}
+          SECRETS_SHA: ${{ steps.secrets.outputs.sha }}
+        run: |
+          set -euo pipefail
+          v2db_sha="$(git -C source rev-parse HEAD 2>/dev/null || printf '%s' unresolved)"
+          migration_versions='[]'
+          if [[ -d source/docker/gw-db/supabase/migrations ]]; then
+            migration_versions="$(
+              find source/docker/gw-db/supabase/migrations -maxdepth 1 -type f \
+                -name '*.sql' -printf '%f\n' | sort | jq -Rsc 'split("\n") | map(select(length > 0))'
+            )"
+          fi
+          jq -n \
+            --arg sourceRepository "$SOURCE_REPOSITORY" \
+            --arg sourceRef "$SOURCE_REF" \
+            --arg sourceSha "$SOURCE_SHA" \
+            --arg v2dbSha "$v2db_sha" \
+            --arg target "$TARGET" \
+            --arg mode "$MODE" \
+            --arg secretsRef "$SECRETS_REF" \
+            --arg secretsSha "${SECRETS_SHA:-unresolved}" \
+            --arg foundationSha "${FOUNDATION_SHA:-unresolved}" \
+            --arg migrationDigest "${MIGRATION_DIGEST:-unresolved}" \
+            --arg artifactDigest "${ARTIFACT_DIGEST:-unresolved}" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg actor "$GITHUB_ACTOR" \
+            --arg workflowRepository "$GITHUB_REPOSITORY" \
+            --arg workflowRef "$GITHUB_REF" \
+            --arg workflowUrl "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg createdAt "$(date -u +%FT%TZ)" \
+            --argjson migrationVersions "$migration_versions" \
+            '{
+              version: 1,
+              sourceRepository: $sourceRepository,
+              sourceRef: $sourceRef,
+              sourceSha: $sourceSha,
+              v2dbSha: $v2dbSha,
+              target: $target,
+              mode: $mode,
+              secretsRef: $secretsRef,
+              secretsSha: $secretsSha,
+              foundationSha: $foundationSha,
+              migrations: {
+                versions: $migrationVersions,
+                digestSha256: $migrationDigest
+              },
+              generatedArtifactDigestSha256: $artifactDigest,
+              workflow: {
+                repository: $workflowRepository,
+                runId: $runId,
+                runAttempt: $runAttempt,
+                actor: $actor,
+                ref: $workflowRef,
+                url: $workflowUrl
+              },
+              createdAt: $createdAt
+            }' > v2-db-database-release.json
+
+      - name: Upload deployment manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-db-database-release-${{ github.run_id }}
+          path: v2-db-database-release.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Write release summary
+        if: always()
+        shell: bash
+        env:
+          DOT_SECRETS_SHA: ${{ steps.secrets.outputs.sha }}
+          MIGRATION_DIGEST: ${{ steps.build.outputs.migration_digest }}
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+            echo '## v2-db database release'
+            echo
+            printf -- "- workflow: \`%s\`\n" "$GITHUB_WORKFLOW"
+            printf -- "- run: %s\n" "$run_url"
+            printf -- "- run attempt: \`%s\`\n" "$GITHUB_RUN_ATTEMPT"
+            printf -- "- source: \`%s@%s\`\n" "$SOURCE_REPOSITORY" "$SOURCE_SHA"
+            printf -- "- source ref: \`%s\`\n" "$SOURCE_REF"
+            printf -- "- Foundation: \`%s\`\n" "$FOUNDATION_SHA"
+            printf -- "- target: \`%s\`\n" "$TARGET"
+            printf -- "- mode: \`%s\`\n" "$MODE"
+            printf -- "- dot-secrets ref: \`%s\`\n" "$SECRETS_REF"
+            printf -- "- dot-secrets resolved SHA: \`%s\`\n" "${DOT_SECRETS_SHA:-unresolved}"
+            printf -- "- migration digest: \`%s\`\n" "${MIGRATION_DIGEST:-unresolved}"
+            echo '- secret values: not included'
+            echo '- deployment manifest: uploaded as a run artifact'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove deployment credentials
+        if: always()
+        shell: bash
+        env:
+          SECRETS_DIRECTORY: ${{ steps.secrets.outputs.secrets_directory }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SECRETS_DIRECTORY:-}" ]]; then
+            rm -rf -- "$SECRETS_DIRECTORY"
+          fi
+          rm -rf -- "$RUNNER_TEMP/database-secrets"
+          rm -f -- "$RUNNER_TEMP/dot-secrets-key" "$RUNNER_TEMP/dot-secrets-known-hosts"
+          rm -f -- "$RUNNER_TEMP/database-identity-check.log"
+          if command -v sudo >/dev/null 2>&1; then
+            sudo rm -rf -- "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/foundation" "$GITHUB_WORKSPACE/ci" "$GITHUB_WORKSPACE/main/sql"
+          else
+            rm -rf -- "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/foundation" "$GITHUB_WORKSPACE/ci" "$GITHUB_WORKSPACE/main/sql"
+          fi
