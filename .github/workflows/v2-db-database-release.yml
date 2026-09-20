@@ -190,7 +190,11 @@ jobs:
             "$CI_IMAGE" bash -lc '
               set -euo pipefail
               cd source
-              ./lein sql
+              git config --global --add safe.directory "$PWD"
+              ./lein run -m gwbuild.db.gen-rpc-exports
+              git diff --exit-code -- \
+                resources/gwdb/gwdb-full.sql \
+                resources/gwdb/gwdb-full.edn
             '
           migration_root="source/docker/gw-db/supabase/migrations"
           test -d "$migration_root"
