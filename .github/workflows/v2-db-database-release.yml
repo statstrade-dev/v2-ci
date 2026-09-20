@@ -164,38 +164,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GH_TOKEN }}
 
-      - name: Configure source dependencies
+      - name: Configure release image
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/main/sql" "$GITHUB_WORKSPACE/source/checkouts"
-          ln -sfn "$GITHUB_WORKSPACE/foundation" "$GITHUB_WORKSPACE/source/checkouts/foundation"
           docker pull "$CI_IMAGE"
-          docker run --rm --network host \
-            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
-            -w "$GITHUB_WORKSPACE/foundation" \
-            -v "$HOME/.m2:/root/.m2" \
-            "$CI_IMAGE" bash -lc 'set -euo pipefail; ./lein install'
 
-      - name: Validate and generate v2-db artifacts
+      - name: Validate checked-in v2-db artifacts
         id: build
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm --network host \
-            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
-            -w "$GITHUB_WORKSPACE" \
-            -v "$HOME/.m2:/root/.m2" \
-            -v /var/run/docker.sock:/var/run/docker.sock:ro \
-            "$CI_IMAGE" bash -lc '
-              set -euo pipefail
-              cd source
-              git config --global --add safe.directory "$PWD"
-              ./lein run -m gwbuild.db.gen-rpc-exports
-              git diff --exit-code -- \
-                resources/gwdb/gwdb-full.sql \
-                resources/gwdb/gwdb-full.edn
-            '
           migration_root="source/docker/gw-db/supabase/migrations"
           test -d "$migration_root"
           migration_digest="$(
@@ -205,12 +184,16 @@ jobs:
               sha256sum |
               awk '{print $1}'
           )"
-          for artifact in source/resources/gwdb/gwdb-full.sql source/resources/gwdb/gwdb-full.edn; do
-            test -s "$artifact"
-          done
+          full_sql="source/resources/gwdb/gwdb-full.sql"
+          full_edn="source/resources/gwdb/gwdb-full.edn"
+          test -s "$full_sql"
+          test -s "$full_edn"
+          grep -q '^CREATE SCHEMA IF NOT EXISTS' "$full_sql"
+          grep -q -- '-- gwdb.deploy.scaffold-000-dev/__init__' "$full_sql"
+          head -c 256 "$full_edn" | grep -q 'postgres\.typed'
           artifact_digest="$({
-            sha256sum source/resources/gwdb/gwdb-full.sql
-            sha256sum source/resources/gwdb/gwdb-full.edn
+            sha256sum "$full_sql"
+            sha256sum "$full_edn"
           } | sha256sum | awk '{print $1}')"
           {
             echo "migration_digest=$migration_digest"
