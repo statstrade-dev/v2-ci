@@ -1,4 +1,4 @@
-name: Publish V2 DB RPC contracts
+name: Publish V2 DB exports
 
 on:
   repository_dispatch:
@@ -123,7 +123,7 @@ jobs:
             "$CI_IMAGE" \
             bash -lc 'set -o pipefail; java -version; lein install 2>&1 | tee foundation-install.log'
 
-      - name: Validate and stage versioned database publication
+      - name: Validate and stage versioned database exports
         run: |
           set -euo pipefail
           # The mounted checkout retains runner ownership while the image
@@ -139,16 +139,14 @@ jobs:
               git config --global --add safe.directory "$PWD"
               ./scripts/publish-rpc-api.sh \
               --ci --source-ref release --source-sha "$SOURCE_SHA" \
-              2>&1 | tee rpc-api-publication.log
+              2>&1 | tee database-export-publication.log
             '
 
-      - name: Write publication summary
+      - name: Write database export summary
         run: |
           set -euo pipefail
           publication_dir="v2-db/target/rpc-publication/$BACKEND_DB_VERSION"
-          api_sha256="$(sha256sum "$publication_dir/rpc-api.json" | awk '{print $1}')"
-          view_sha256="$(sha256sum "$publication_dir/rpc-view.json" | awk '{print $1}')"
-          full_sql_sha256="$(sha256sum "$publication_dir/full.sql" | awk '{print $1}')"
+          full_sql_sha256="$(sha256sum "$publication_dir/gwdb-full.sql" | awk '{print $1}')"
           full_edn_sha256="$(sha256sum "$publication_dir/gwdb-full.edn" | awk '{print $1}')"
           {
             echo '## V2 DB publication exports'
@@ -156,13 +154,11 @@ jobs:
             printf -- '- source: `%s@%s`\n' "$SOURCE_REPOSITORY" "$SOURCE_SHA"
             printf -- '- source ref: `%s`\n' "$SOURCE_REF"
             printf -- '- backend-db version: `%s`\n' "$BACKEND_DB_VERSION"
-            printf -- '- rpc-api.json SHA-256: `%s`\n' "$api_sha256"
-            printf -- '- rpc-view.json SHA-256: `%s`\n' "$view_sha256"
-            printf -- '- full.sql SHA-256: `%s`\n' "$full_sql_sha256"
+            printf -- '- gwdb-full.sql SHA-256: `%s`\n' "$full_sql_sha256"
             printf -- '- gwdb-full.edn SHA-256: `%s`\n' "$full_edn_sha256"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload versioned database publication artifact
+      - name: Upload versioned database exports artifact
         uses: actions/upload-artifact@v4
         with:
           name: rpc-contracts-backend-db-${{ steps.foundation-lock.outputs.backend_db_version }}-${{ env.SOURCE_SHA }}

@@ -59,21 +59,21 @@ the source ref is `release`. The publisher independently verifies that the
 exact SHA is the current `release` ref before checking it out, then creates or
 updates the matching GitHub Release.
 
-The uploaded `rpc-contracts-backend-db-<version>-<source_sha>` artifact contains:
+The uploaded `rpc-contracts-backend-db-<version>-<source_sha>` artifact contains
+only:
 
-- `rpc-api.json` and `rpc-api-<version>.json`;
-- `rpc-view.json` and `rpc-view-<version>.json`;
-- `full.sql` and `full-<version>.sql`;
+- `gwdb-full.sql` and `gwdb-full-<version>.sql`;
 - `gwdb-full.edn` and `gwdb-full-<version>.edn`;
 - `provenance.json`, containing the exact backend-db release SHA, version, and
-  SHA-256 digests for all four exports.
+  SHA-256 digests for both exports.
 
 The source-side `backend-db` Makefile invokes
-`gwbuild.db.gen-rpc-exports` directly. `make rpc-api-publish` stages a local
-bundle, while `make rpc-api-dispatch` requests the protected central DB gate;
+`gwbuild.db.gen-rpc-exports` directly. `make rpc-api-publish` stages the two
+database exports locally, while `make rpc-api-dispatch` requests the protected
+central DB gate;
 `make rpc-api-release` performs the same release checks locally. The central
 publisher requires a `V2_DB_RELEASE_TOKEN` secret with write access to
-`statstrade-dev/v2-db` contents and read access to its Actions statuses/runs.
+`statstrade-dev/v2-db` contents and read access to its commit statuses.
 Neither path publishes credentials or adds a provider/package release path.
 
 ## License
