@@ -168,12 +168,12 @@ jobs:
 
       - name: Publish GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.V2_DB_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           PUBLISHER_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN" || {
-            echo "v2-ci requires V2_DB_RELEASE_TOKEN to publish the backend-db GitHub Release" >&2
+            echo "v2-ci requires GH_TOKEN to publish the backend-db GitHub Release" >&2
             exit 1
           }
           ./v2-db/scripts/publish-rpc-api.sh \

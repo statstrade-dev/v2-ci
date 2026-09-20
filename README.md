@@ -86,8 +86,8 @@ The source-side `backend-db` Makefile invokes
 `gwbuild.db.gen-rpc-exports` directly. `make rpc-api-publish` stages the two
 database exports locally, while `make rpc-api-dispatch` requests the protected
 central DB gate; `make rpc-api-release` performs the same release checks locally.
-The central publisher requires a `V2_DB_RELEASE_TOKEN` secret with write access
-to `statstrade-dev/v2-db` contents and read access to its commit statuses.
+The central publisher uses the `GH_TOKEN` secret with write access to
+`statstrade-dev/v2-db` contents and read access to its commit statuses.
 Neither path publishes credentials or adds a provider/package release path.
 
 ## License
