@@ -1,0 +1,72 @@
+name: V2 source CI
+
+on:
+  repository_dispatch:
+    types: [v2-ci-requested]
+
+permissions:
+  contents: read
+
+# Serialize requests for the same SHA without cancelling status finalization.
+concurrency:
+  group: v2-source-ci-${{ github.event.client_payload.source_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  request:
+    name: Validate source request
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.request.outputs.frontend }}
+      docs: ${{ steps.request.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {validateRequest} = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/v2-source-request.mjs`);
+            const selected = validateRequest(context.payload.client_payload);
+            for (const [key, value] of Object.entries(selected)) core.setOutput(key, String(value));
+
+  frontend:
+    needs: request
+    if: needs.request.outputs.frontend == 'true'
+    uses: ./.github/workflows/_v2-frontend.yml
+    with:
+      source_repository: statstrade-dev/v2
+      source_ref: ${{ github.event.client_payload.source_sha }}
+    secrets:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+  docs:
+    needs: request
+    if: needs.request.outputs.docs == 'true'
+    uses: ./.github/workflows/_v2-docs.yml
+    with:
+      source_repository: statstrade-dev/v2
+      source_ref: ${{ github.event.client_payload.source_sha }}
+    secrets:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+  report:
+    name: Finalize requested source statuses
+    needs: [request, frontend, docs]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/github-script@v7
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            const {reportRequest} = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/v2-source-request.mjs`);
+            await reportRequest({github, payload: context.payload.client_payload,
+              needs: JSON.parse(process.env.RESULTS), runUrl: process.env.RUN_URL});

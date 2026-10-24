@@ -1,8 +1,8 @@
 # Greenways CI
 
 `statstrade-dev/v2-ci` runs central validation for exact revisions of
-`statstrade-dev/v2-db`. The repository is being rebuilt from a minimal,
-database-first gate.
+`statstrade-dev/v2-db` and the frontend/documentation gates for
+`statstrade-dev/v2`. Database and source requests have separate receivers.
 
 ## Initial V2 DB gate
 
@@ -93,3 +93,43 @@ Neither path publishes credentials or adds a provider/package release path.
 ## License
 
 Private and proprietary to Greenways AI.
+
+## V2 source frontend and documentation gates
+
+`.github/workflows/v2-source-ci.yml` receives the existing `v2-ci-requested`
+event (source schema 3). It validates the repository, exact 40-character SHA,
+and boolean segment map before checking out that revision. It leaves the
+`v2-db-changed` database pipeline unchanged.
+
+Requested `frontend` and `docs` segments run the historical Storybook and
+Docusaurus/Build Portal validation commands, including business-plan PDFs and
+Netlify's **offline build** packaging checks. This restores validation only:
+there is no preview/production deployment, release, or publication path.
+The source checkout does not persist the checkout token, and source builds
+run separately from the trusted status reporter.
+
+An always-running reporter maps actual job results back to `v2-ci/frontend`
+and `v2-ci/docs` on the exact requested SHA. Failed setup/build/upload, skipped
+requested jobs, and cancellation cannot be reported as success. Unrequested
+segments are not touched. A requested legacy backend/language segment without
+a runner receives an explicit error, not a fabricated pass or indefinite
+pending status; its runner must be restored separately before enabling it.
+The existing source-side backend-disable policy is not changed here.
+
+Same-SHA requests are serialized without cancelling an active status reporter.
+GitHub still permits manual cancellation and infrastructure/API failures, so
+status delivery cannot be guaranteed if GitHub cannot start or finish the
+reporter; inspect the linked central run in that case.
+
+Local contract validation (also run on central pull requests):
+
+```sh
+node --test .github/scripts/*.test.mjs
+```
+
+These tests exercise selection, strict payload validation, source identity,
+terminal status mapping, unsupported gates, and status API failures. They do
+not certify frontend/docs builds. Repository dispatch only loads workflows
+from the default branch, so after review and merge, rerun the source request
+for the **same source SHA** and verify both real build results and their linked
+source statuses. A draft central PR cannot activate this receiver.
